@@ -1,0 +1,57 @@
+# =============================================================
+# 発注書CSV変換アプリ 設定ファイル
+# 「印刷勘太郎から求むものリスト」の協議結果をここに反映する。
+# コードを変更せず、このファイルの修正だけで仕様変更に対応できる。
+# =============================================================
+
+# --- 2. CSVフォーマット仕様(勘太郎と要確認) ---
+csv:
+  encoding: cp932          # 文字コード: cp932(Shift_JIS) / utf-8 / utf-8-sig
+  newline: "\r\n"          # 改行コード: "\r\n"(CRLF) / "\n"(LF)
+  header: true             # 1行目にヘッダー行を出すか
+  quoting: all             # 囲み文字: all(全て"で囲む) / minimal(必要時のみ) / none
+  # 列定義: 勘太郎の取込仕様に合わせて並び順・桁数・必須を定義
+  columns:
+    - { key: order_no,      label: 受注番号,   required: true,  max_len: 20 }
+    - { key: order_date,    label: 受注日,     required: true,  max_len: 10, format: date }   # YYYY/MM/DD
+    - { key: customer_code, label: 得意先コード, required: false, max_len: 10 }
+    - { key: customer_name, label: 得意先名,   required: true,  max_len: 60 }
+    - { key: item_name,     label: 品名,       required: true,  max_len: 100 }
+    - { key: spec,          label: 仕様,       required: false, max_len: 200 }
+    - { key: quantity,      label: 数量,       required: true,  max_len: 10, format: int }
+    - { key: unit_price,    label: 単価,       required: false, max_len: 12, format: number }
+    - { key: amount,        label: 金額,       required: false, max_len: 14, format: number }
+    - { key: delivery_date, label: 納期,       required: false, max_len: 10, format: date }
+    - { key: note,          label: 備考,       required: false, max_len: 200 }
+
+# --- 3. 運用ルール(勘太郎と要確認) ---
+output:
+  dir: ./data/incoming            # 勘太郎がSFTPで見に来る配置先ディレクトリ
+  filename_pattern: "order_{timestamp}_{seq:03d}.csv"  # 命名規則(秒単位タイムスタンプ+連番で重複防止)
+  timestamp_format: "%Y%m%d_%H%M%S"
+  done_file: true                 # .doneトリガーファイルを出すか(転送完了の合図)
+  done_suffix: ".done"
+  atomic_write: true              # 一時ファイル(.tmp)に書いてからrename(不完全CSVの読込防止)
+  archive_dir: ./data/archive     # 勘太郎取込後に移動するフォルダ(処理済み)
+  failed_dir: ./data/failed       # エラー時の退避先
+
+# --- 発生頻度: batch(溜めて一括) / realtime(確定の都度) ---
+mode: realtime
+
+# --- AI読取設定 ---
+extraction:
+  model: claude-sonnet-4-6
+  max_tokens: 4000
+
+# --- 1. SFTP接続情報(勘太郎側がPULLする構成が基本。PUSHする場合のみ使用) ---
+sftp:
+  push_enabled: false             # true にするとアプリ側からSFTPで送信(paramiko)
+  host: ""
+  port: 22
+  username: ""
+  private_key_path: ""            # SSH鍵認証(パスワードは使わない)
+  remote_dir: "/incoming/orders/"
+
+server:
+  host: 0.0.0.0
+  port: 8000
