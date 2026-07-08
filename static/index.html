@@ -23,7 +23,7 @@
   .step.active b,.step.active{color:#fff}
   .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:22px;margin-bottom:20px}
   h2{font-size:15px;color:var(--ink);margin-bottom:12px;padding-left:10px;border-left:4px solid var(--ink)}
-  .drop{border:2px dashed var(--line);border-radius:8px;padding:44px 20px;text-align:center;color:var(--sub);cursor:pointer;transition:.15s}
+  .drop{display:block;border:2px dashed var(--line);border-radius:8px;padding:44px 20px;text-align:center;color:var(--sub);cursor:pointer;transition:.15s}
   .drop:hover,.drop.over{border-color:var(--ink);background:#f0f4f8}
   .drop input{display:none}
   .drop .big{font-size:15px;color:#1c1c1c;font-weight:600;margin-bottom:4px}
@@ -79,7 +79,7 @@
       <div class="big">ここに発注書をドラッグ＆ドロップ</div>
       <div>またはクリックしてファイルを選択（PDF / PNG / JPEG）</div>
     </label>
-    <p id="uploadStatus" style="margin-top:12px;font-size:13px"></p>
+    <p id="uploadStatus" style="display:none;margin-top:14px;font-size:13px;background:#f0f4f8;border:1px solid #c6d4e2;border-radius:6px;padding:10px 14px"></p>
   </section>
 
   <section class="card" id="reviewCard" style="display:none">
@@ -150,6 +150,7 @@ fi.addEventListener("change",()=>{ if(fi.files[0]) upload(fi.files[0]); });
 
 async function upload(file){
   const st = document.getElementById("uploadStatus");
+  st.style.display = "block";
   st.innerHTML = '<span class="spinner"></span>AIが発注書を読み取っています…（数十秒かかる場合があります）';
   const fd = new FormData(); fd.append("file", file);
   try{
@@ -195,7 +196,8 @@ function reset(){
   rows=[]; sourceFile="";
   document.getElementById("reviewCard").style.display="none";
   document.getElementById("doneCard").style.display="none";
-  document.getElementById("uploadStatus").textContent="";
+  const st = document.getElementById("uploadStatus");
+  st.textContent=""; st.style.display="none";
   fi.value=""; setStep(1); window.scrollTo({top:0,behavior:"smooth"});
 }
 
