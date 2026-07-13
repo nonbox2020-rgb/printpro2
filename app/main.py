@@ -1,23 +1,32 @@
 """発注書 → 印刷勘太郎向けCSV変換 Webアプリ(FastAPI)。
 
 フロー:
-  1. 発注書(PDF/画像)をアップロード → Claude APIがデータ抽出
-  2. 画面で人が確認・修正(必須チェック・桁数チェック付き)
-  3. 確定 → 検証 → CSV生成(Shift_JIS/CRLF等は設定) → アトミック書込 → .done 作成
-  4. 勘太郎側がSFTP(PULL)で取込。必要ならアプリからSFTP PUSHも可能(鍵認証)
+  1. ログイン(全画面・API共通で認証必須)
+  2. 発注書(PDF/画像・複数可)をアップロード → Claude APIがデータ抽出
+  3. 画面で人が確認・修正(必須チェック・桁数チェック付き)
+  4. 確定 → 検証 → CSV生成 → アトミック書込 → .done 作成
+  5. 設定によりSFTPで印刷勘太郎サーバーへ自動送信(鍵認証/パスワード認証)
+
+必要な環境変数:
+  ANTHROPIC_API_KEY ... Claude APIキー
+  APP_USERNAME / APP_PASSWORD ... ログインID/パスワード
+  SECRET_KEY ... セッション署名用のランダム文字列
+  SFTP_PASSWORD ... SFTPをパスワード認証で使う場合のみ
 """
 import logging
 import os
+import secrets
 import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
 from app import csv_writer, extractor
 
@@ -36,52 +45,115 @@ app = FastAPI(title="発注書CSV変換アプリ(印刷勘太郎連携)")
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---------------- 認証 ----------------
+
+PUBLIC_PATHS = {"/login.html", "/api/login"}
+
+
+@app.middleware("http")
+async def auth_guard(request: Request, call_next):
+    """ログイン必須ガード。未ログインなら画面はログインページへ、APIは401を返す。"""
+    path = request.url.path
+    if path in PUBLIC_PATHS or request.session.get("user"):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "ログインが必要です"}, status_code=401)
+    return RedirectResponse("/login.html")
+
+
+# 注意: add_middleware は「後に登録したものが先に実行」されるため、
+# auth_guard(上のデコレータ)より後に登録することで Session → 認証 の順で動く。
+app.add_middleware(SessionMiddleware,
+                   secret_key=os.environ.get("SECRET_KEY", secrets.token_hex(32)),
+                   max_age=8 * 60 * 60)  # セッション有効期間: 8時間
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/login")
+def login(req: LoginRequest, request: Request):
+    expect_user = os.environ.get("APP_USERNAME", "")
+    expect_pass = os.environ.get("APP_PASSWORD", "")
+    if not expect_user or not expect_pass:
+        raise HTTPException(status_code=500,
+                            detail="サーバーに APP_USERNAME / APP_PASSWORD が設定されていません")
+    ok = secrets.compare_digest(req.username, expect_user) and \
+         secrets.compare_digest(req.password, expect_pass)
+    if not ok:
+        log.warning("ログイン失敗: user=%s", req.username)
+        raise HTTPException(status_code=401, detail="IDまたはパスワードが違います")
+    request.session["user"] = req.username
+    log.info("ログイン成功: %s", req.username)
+    return {"ok": True}
+
+
+@app.get("/api/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login.html")
+
+
+# ---------------- 設定参照 ----------------
+
+@app.get("/api/config")
+def get_config(request: Request):
+    """UIが列定義・運用設定を参照するためのAPI(SFTP秘密情報は返さない)。"""
+    return {
+        "columns": CONFIG["csv"]["columns"],
+        "output": CONFIG["output"],
+        "sftp_push": CONFIG["sftp"]["push_enabled"],
+        "user": request.session.get("user", ""),
+    }
+
+
+# ---------------- AI抽出(複数ファイル対応) ----------------
+
+@app.post("/api/extract")
+async def extract(files: list[UploadFile] = File(...)):
+    """複数の発注書をまとめてAI抽出。ファイルごとに成否を返し、明細は結合する。"""
+    orders, results = [], []
+    for file in files:
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        saved = UPLOAD_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}{ext}"
+        with open(saved, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        log.info("アップロード受付: %s (元: %s)", saved.name, file.filename)
+        try:
+            result = extractor.extract_from_file(
+                str(saved), CONFIG["csv"]["columns"],
+                CONFIG["extraction"]["model"], CONFIG["extraction"]["max_tokens"],
+            )
+            for row in result["orders"]:
+                row["_source"] = file.filename  # 読取元の表示用(CSVには出力しない)
+            orders.extend(result["orders"])
+            results.append({"file": file.filename, "ok": True,
+                            "rows": len(result["orders"]),
+                            "note": result.get("confidence_note", "")})
+            log.info("抽出成功: %s (%d明細)", file.filename, len(result["orders"]))
+        except Exception as e:
+            log.exception("AI抽出エラー: %s", file.filename)
+            results.append({"file": file.filename, "ok": False, "rows": 0, "note": str(e)})
+    return {"orders": orders, "results": results}
+
+
+# ---------------- CSV出力 + SFTP送信 ----------------
 
 class ExportRequest(BaseModel):
     rows: list[dict]
     source_file: str = ""
 
 
-@app.get("/api/config")
-def get_config():
-    """UIが列定義・運用設定を参照するためのAPI(SFTP秘密情報は返さない)。"""
-    return {
-        "columns": CONFIG["csv"]["columns"],
-        "csv": {k: v for k, v in CONFIG["csv"].items() if k != "columns"},
-        "output": CONFIG["output"],
-        "mode": CONFIG["mode"],
-        "sftp_push": CONFIG["sftp"]["push_enabled"],
-    }
-
-
-@app.post("/api/extract")
-async def extract(file: UploadFile = File(...)):
-    """発注書をアップロードしてAI抽出。結果は画面で人が確認・修正する。"""
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    saved = UPLOAD_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}{ext}"
-    with open(saved, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-    log.info("アップロード受付: %s (元ファイル名: %s)", saved.name, file.filename)
-    try:
-        result = extractor.extract_from_file(
-            str(saved), CONFIG["csv"]["columns"],
-            CONFIG["extraction"]["model"], CONFIG["extraction"]["max_tokens"],
-        )
-    except Exception as e:
-        log.exception("AI抽出エラー: %s", saved.name)
-        raise HTTPException(status_code=422, detail=f"読み取りに失敗しました: {e}")
-    log.info("抽出成功: %s (%d明細)", saved.name, len(result["orders"]))
-    return {"orders": result["orders"], "confidence_note": result.get("confidence_note", ""),
-            "source_file": saved.name}
-
-
 @app.post("/api/export")
 def export(req: ExportRequest):
-    """人の確認を経たデータを検証し、勘太郎仕様のCSVとして出力する。"""
+    """人の確認を経たデータを検証し、勘太郎仕様のCSVとして出力・送信する。"""
     out_cfg = CONFIG["output"]
     out_dir = str(BASE_DIR / out_cfg["dir"]) if not os.path.isabs(out_cfg["dir"]) else out_cfg["dir"]
+    rows_in = [{k: v for k, v in r.items() if not k.startswith("_")} for r in req.rows]
     try:
-        rows = csv_writer.validate_rows(req.rows, CONFIG["csv"]["columns"], CONFIG["csv"]["encoding"])
+        rows = csv_writer.validate_rows(rows_in, CONFIG["csv"]["columns"], CONFIG["csv"]["encoding"])
     except csv_writer.ValidationError as e:
         return {"ok": False, "errors": e.errors}
 
@@ -93,33 +165,52 @@ def export(req: ExportRequest):
 
     sftp_result = None
     if CONFIG["sftp"]["push_enabled"]:
-        sftp_result = _sftp_push(paths)
-    return {"ok": True, "filename": filename, "rows": len(rows), "paths": paths, "sftp": sftp_result}
+        try:
+            _sftp_push(paths)
+            sftp_result = {"ok": True, "message": "印刷勘太郎サーバーへ送信しました"}
+        except Exception as e:
+            log.exception("SFTP送信エラー: %s", filename)
+            sftp_result = {"ok": False, "message": f"SFTP送信に失敗しました: {e}(CSVはサーバー内に保存済み)"}
+    return {"ok": True, "filename": filename, "rows": len(rows), "sftp": sftp_result}
 
 
-def _sftp_push(paths: dict) -> dict:
-    """アプリ側からPUSHする構成の場合のみ使用。SSH鍵認証(パスワード不使用)。"""
+def _sftp_push(paths: dict):
+    """SFTPで勘太郎サーバーへ送信。鍵認証を優先し、なければパスワード認証(環境変数)。
+
+    送信順序が重要: CSV本体を先に(.tmp→renameでアトミックに)、.done を最後に送る。
+    """
     import paramiko
     s = CONFIG["sftp"]
-    key = paramiko.Ed25519Key.from_private_key_file(s["private_key_path"])
-    transport = paramiko.Transport((s["host"], s["port"]))
+    transport = paramiko.Transport((s["host"], int(s["port"])))
     try:
-        transport.connect(username=s["username"], pkey=key)
+        key_path = s.get("private_key_path") or ""
+        if key_path and os.path.exists(key_path):
+            try:
+                pkey = paramiko.Ed25519Key.from_private_key_file(key_path)
+            except paramiko.SSHException:
+                pkey = paramiko.RSAKey.from_private_key_file(key_path)
+            transport.connect(username=s["username"], pkey=pkey)
+        else:
+            password = os.environ.get("SFTP_PASSWORD", "")
+            if not password:
+                raise RuntimeError("SSH鍵ファイルが見つからず、SFTP_PASSWORD も未設定です")
+            transport.connect(username=s["username"], password=password)
         sftp = paramiko.SFTPClient.from_transport(transport)
-        for p in [paths["csv"], paths["done"]]:  # CSVを先に、.doneを最後に送る(順序が重要)
+        remote_dir = s["remote_dir"].rstrip("/")
+        for p in [paths["csv"], paths["done"]]:
             if p:
-                remote = s["remote_dir"].rstrip("/") + "/" + os.path.basename(p)
+                remote = remote_dir + "/" + os.path.basename(p)
                 sftp.put(p, remote + ".tmp")
-                sftp.rename(remote + ".tmp", remote)  # リモート側でもアトミックに
-        log.info("SFTP送信完了: %s", paths["csv"])
-        return {"ok": True}
+                sftp.rename(remote + ".tmp", remote)
+        log.info("SFTP送信完了: %s → %s", paths["csv"], remote_dir)
     finally:
         transport.close()
 
 
+# ---------------- ファイル一覧・ダウンロード ----------------
+
 @app.get("/api/files")
 def list_files():
-    """出力済み/処理済みファイルの一覧(運用状況の見える化)。"""
     result = {}
     for label, key in [("incoming", "dir"), ("archive", "archive_dir"), ("failed", "failed_dir")]:
         d = BASE_DIR / CONFIG["output"][key]
