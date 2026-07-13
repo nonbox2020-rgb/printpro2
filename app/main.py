@@ -13,6 +13,7 @@
   SECRET_KEY ... セッション署名用のランダム文字列
   SFTP_PASSWORD ... SFTPをパスワード認証で使う場合のみ
 """
+import json
 import logging
 import os
 import secrets
@@ -29,6 +30,7 @@ from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import csv_writer, extractor
+from app.store import OrderStore
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG = yaml.safe_load((BASE_DIR / "config.yaml").read_text(encoding="utf-8"))
@@ -44,6 +46,10 @@ app = FastAPI(title="発注書CSV変換アプリ(印刷勘太郎連携)")
 
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+STORE = OrderStore(str(BASE_DIR / "data" / "orders.json"),
+                   str(BASE_DIR / "data" / "notifications.json"),
+                   key_field=CONFIG.get("update_check", {}).get("key_field", "order_no"))
 
 # ---------------- 認証 ----------------
 
@@ -139,6 +145,45 @@ async def extract(files: list[UploadFile] = File(...)):
     return {"orders": orders, "results": results}
 
 
+# ---------------- 更新チェック・通知 ----------------
+
+class CheckRequest(BaseModel):
+    rows: list[dict]
+
+
+@app.post("/api/check")
+def check(req: CheckRequest):
+    """AI読取直後に呼び、各明細が 新規/更新/変更なし かと変更科目を返す。"""
+    rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in req.rows]
+    return {"results": STORE.check_rows(rows, CONFIG["csv"]["columns"])}
+
+
+@app.get("/api/notifications")
+def notifications():
+    """発注書の更新通知一覧(画面のお知らせ欄に表示)。"""
+    return {"notifications": STORE.notifications()}
+
+
+def _notify_slack(changed: list[dict], filename: str):
+    """SLACK_WEBHOOK_URL が設定されていればSlackにも通知(未設定なら何もしない)。"""
+    url = os.environ.get("SLACK_WEBHOOK_URL", "")
+    if not url or not changed:
+        return
+    try:
+        import urllib.request
+        lines = [f"【発注書の更新がありました】({filename})"]
+        for n in changed:
+            diffs = "、".join(f"{c['label']}: {c['old']} → {c['new']}" for c in n["changes"])
+            lines.append(f"・受注番号 {n['order_no']}({n['item_name']}): {diffs}")
+        body = json.dumps({"text": "\n".join(lines)}).encode()
+        req = urllib.request.Request(url, data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+        log.info("Slack通知送信: %d件", len(changed))
+    except Exception:
+        log.exception("Slack通知に失敗(処理は継続)")
+
+
 # ---------------- CSV出力 + SFTP送信 ----------------
 
 class ExportRequest(BaseModel):
@@ -157,11 +202,33 @@ def export(req: ExportRequest):
     except csv_writer.ValidationError as e:
         return {"ok": False, "errors": e.errors}
 
-    data = csv_writer.build_csv_bytes(rows, CONFIG["csv"])
+    # 台帳と比較: 新規/更新/変更なし を判定し、台帳を更新
+    results = STORE.commit_rows(rows, CONFIG["csv"]["columns"], req.source_file)
+    statuses = [r["status"] for r in results]
+    skip_unchanged = CONFIG.get("update_check", {}).get("skip_unchanged", True)
+    if skip_unchanged:
+        rows_out = [row for row, r in zip(rows, results) if r["status"] != "unchanged"]
+    else:
+        rows_out = rows
+    if not rows_out:
+        return {"ok": True, "filename": None, "rows": 0,
+                "summary": {"new": 0, "updated": 0,
+                            "unchanged": statuses.count("unchanged")},
+                "message": "すべて登録済みの内容と同一のため、CSVは出力しませんでした"}
+
+    data = csv_writer.build_csv_bytes(rows_out, CONFIG["csv"])
     filename = csv_writer.next_filename(out_dir, out_cfg["filename_pattern"], out_cfg["timestamp_format"])
     paths = csv_writer.write_atomic(out_dir, filename, data,
                                     out_cfg.get("done_file", True), out_cfg.get("done_suffix", ".done"))
-    log.info("CSV出力: %s (%d明細, 元:%s)", paths["csv"], len(rows), req.source_file)
+    log.info("CSV出力: %s (%d明細, 新規%d/更新%d/同一スキップ%d, 元:%s)",
+             paths["csv"], len(rows_out), statuses.count("new"),
+             statuses.count("updated"), statuses.count("unchanged"), req.source_file)
+
+    # 更新があった明細をSlack通知(SLACK_WEBHOOK_URL 設定時のみ)
+    changed = [{"order_no": row.get("order_no", ""),
+                "item_name": row.get("item_name", ""), "changes": r["changes"]}
+               for row, r in zip(rows, results) if r["status"] == "updated"]
+    _notify_slack(changed, filename)
 
     sftp_result = None
     if CONFIG["sftp"]["push_enabled"]:
@@ -171,7 +238,10 @@ def export(req: ExportRequest):
         except Exception as e:
             log.exception("SFTP送信エラー: %s", filename)
             sftp_result = {"ok": False, "message": f"SFTP送信に失敗しました: {e}(CSVはサーバー内に保存済み)"}
-    return {"ok": True, "filename": filename, "rows": len(rows), "sftp": sftp_result}
+    return {"ok": True, "filename": filename, "rows": len(rows_out), "sftp": sftp_result,
+            "summary": {"new": statuses.count("new"), "updated": statuses.count("updated"),
+                        "unchanged": statuses.count("unchanged")},
+            "changed": changed}
 
 
 def _sftp_push(paths: dict):
