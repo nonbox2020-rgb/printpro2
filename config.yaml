@@ -55,3 +55,8 @@ sftp:
 server:
   host: 0.0.0.0
   port: 8000
+
+# --- 発注書の更新(差し替え)検出 ---
+update_check:
+  key_field: order_no      # 同一発注と判定するキー(受注番号)
+  skip_unchanged: true     # 内容が前回と完全に同じ明細はCSVに出力しない(二重登録防止)
