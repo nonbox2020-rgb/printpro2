@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ログイン ｜ 発注書CSV変換</title>
+<style>
+  :root{--ink:#1b3a5c;--ink-deep:#122a44;--paper:#f7f6f2;--line:#dcd9d0;--shu:#c8452c;--sub:#6b6f76}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Hiragino Sans","Yu Gothic UI","Noto Sans JP",sans-serif;background:var(--paper);
+       min-height:100vh;display:flex;align-items:center;justify-content:center;color:#1c1c1c}
+  .box{background:#fff;border:1px solid var(--line);border-radius:10px;padding:36px 34px;width:360px;max-width:92vw}
+  .brand{border-left:4px solid var(--ink);padding-left:12px;margin-bottom:26px}
+  .brand h1{font-size:18px;color:var(--ink)}
+  .brand p{font-size:12px;color:var(--sub)}
+  label{display:block;font-size:13px;font-weight:600;margin:14px 0 5px}
+  input{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:6px}
+  input:focus{outline:2px solid var(--ink);outline-offset:-1px}
+  button{width:100%;margin-top:22px;font:inherit;font-weight:700;color:#fff;background:var(--ink);
+         border:none;border-radius:6px;padding:11px;cursor:pointer}
+  button:hover{background:var(--ink-deep)}
+  button:disabled{background:#9aa5b1;cursor:not-allowed}
+  .err{display:none;margin-top:14px;font-size:13px;color:#8a2a18;background:#fbe9e5;
+       border:1px solid #e0b0a5;border-radius:6px;padding:9px 12px}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="brand">
+    <h1>発注書CSV変換</h1>
+    <p>印刷勘太郎 連携システム</p>
+  </div>
+  <label for="u">ユーザーID</label>
+  <input id="u" autocomplete="username" autofocus>
+  <label for="p">パスワード</label>
+  <input id="p" type="password" autocomplete="current-password">
+  <button id="btn" onclick="doLogin()">ログイン</button>
+  <div class="err" id="err"></div>
+</div>
+<script>
+async function doLogin(){
+  const btn = document.getElementById("btn"), err = document.getElementById("err");
+  btn.disabled = true; btn.textContent = "確認中…"; err.style.display = "none";
+  try{
+    const res = await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({username: document.getElementById("u").value,
+                            password: document.getElementById("p").value})});
+    if(res.ok){ location.href = "/"; return; }
+    const j = await res.json();
+    err.textContent = j.detail || "ログインに失敗しました"; err.style.display = "block";
+  }catch(e){ err.textContent = "通信エラー: " + e.message; err.style.display = "block"; }
+  btn.disabled = false; btn.textContent = "ログイン";
+}
+document.getElementById("p").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+</script>
+</body>
+</html>
