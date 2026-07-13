@@ -14,12 +14,14 @@
   header{background:var(--ink);color:#fff;padding:14px 28px;display:flex;align-items:baseline;gap:14px}
   header h1{font-size:17px;font-weight:700;letter-spacing:.06em}
   header .sub{font-size:12px;opacity:.75}
+  header .right{margin-left:auto;font-size:12px;display:flex;gap:14px;align-items:baseline}
+  header a{color:#cfe0f0}
   main{max-width:1180px;margin:0 auto;padding:24px 20px 60px}
   .steps{display:flex;gap:0;margin-bottom:22px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--card)}
-  .step{flex:1;padding:10px 16px;font-size:13px;color:var(--sub);border-right:1px solid var(--line);position:relative}
+  .step{flex:1;padding:10px 16px;font-size:13px;color:var(--sub);border-right:1px solid var(--line)}
   .step:last-child{border-right:none}
   .step b{display:block;font-size:14px;color:#1c1c1c}
-  .step.active{background:var(--ink);}
+  .step.active{background:var(--ink)}
   .step.active b,.step.active{color:#fff}
   .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:22px;margin-bottom:20px}
   h2{font-size:15px;color:var(--ink);margin-bottom:12px;padding-left:10px;border-left:4px solid var(--ink)}
@@ -38,13 +40,14 @@
   td{border:1px solid var(--line);padding:0}
   td input{width:100%;border:none;padding:8px;font:inherit;font-size:13px;background:transparent}
   td input:focus{outline:2px solid var(--ink);outline-offset:-2px;background:#fff}
-  td.err input{background:#fbe9e5}
+  td.src{padding:8px;font-size:11px;color:var(--sub);white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;background:#fafaf7}
   .table-wrap{overflow-x:auto;margin-bottom:14px}
-  .note{background:#fff8e6;border:1px solid #e6d9a8;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:14px}
+  .note{background:#fff8e6;border:1px solid #e6d9a8;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:10px}
   .errors{background:#fbe9e5;border:1px solid #e0b0a5;border-radius:6px;padding:10px 14px;font-size:13px;color:#8a2a18;margin-bottom:14px}
   .errors li{margin-left:18px}
   .success{background:#e8f3ec;border:1px solid #b5d4c1;border-radius:6px;padding:14px 16px;margin-bottom:14px}
   .success .fname{font-family:var(--mono);font-weight:700;color:var(--ok)}
+  .warn{background:#fff8e6;border:1px solid #e6d9a8;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:14px}
   .row-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .spinner{display:inline-block;width:16px;height:16px;border:2px solid #cbd5df;border-top-color:var(--ink);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-3px;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -55,7 +58,10 @@
   .filelist .file{display:flex;gap:14px;padding:8px 4px;border-bottom:1px solid var(--line);align-items:center}
   .filelist .fn{font-family:var(--mono);flex:1}
   .badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#e8f3ec;color:var(--ok);border:1px solid #b5d4c1}
+  .badge.ng{background:#fbe9e5;color:#8a2a18;border-color:#e0b0a5}
   .muted{color:var(--sub);font-size:12px}
+  .filesum{font-size:13px;margin-bottom:10px}
+  .filesum li{margin-left:20px}
   footer{max-width:1180px;margin:0 auto;padding:0 20px 30px;color:var(--sub);font-size:12px}
   @media(max-width:700px){.steps{flex-direction:column}.step{border-right:none;border-bottom:1px solid var(--line)}}
 </style>
@@ -64,19 +70,20 @@
 <header>
   <h1>発注書CSV変換</h1>
   <span class="sub">AI読取 → 確認 → 印刷勘太郎向けCSV出力</span>
+  <span class="right"><span id="whoami"></span><a href="/api/logout">ログアウト</a></span>
 </header>
 <main>
   <div class="steps">
-    <div class="step active" id="st1"><b>1. 発注書アップロード</b>PDF・画像をAIが読み取ります</div>
+    <div class="step active" id="st1"><b>1. 発注書アップロード</b>複数まとめてAIが読み取ります</div>
     <div class="step" id="st2"><b>2. 内容の確認・修正</b>必ず目視で確認してから確定します</div>
-    <div class="step" id="st3"><b>3. CSV出力</b>連携フォルダへ保存し .done を作成</div>
+    <div class="step" id="st3"><b>3. CSV出力</b>保存・.done作成、SFTP送信(設定時)</div>
   </div>
 
   <section class="card" id="uploadCard">
     <h2>発注書のアップロード</h2>
     <label class="drop" id="drop">
-      <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp">
-      <div class="big">ここに発注書をドラッグ＆ドロップ</div>
+      <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp">
+      <div class="big">ここに発注書をドラッグ＆ドロップ（複数可）</div>
       <div>またはクリックしてファイルを選択（PDF / PNG / JPEG）</div>
     </label>
     <p id="uploadStatus" style="display:none;margin-top:14px;font-size:13px;background:#f0f4f8;border:1px solid #c6d4e2;border-radius:6px;padding:10px 14px"></p>
@@ -84,22 +91,23 @@
 
   <section class="card" id="reviewCard" style="display:none">
     <h2>読取結果の確認・修正</h2>
-    <div class="note" id="aiNote" style="display:none"></div>
+    <div class="filesum" id="fileSummary"></div>
     <div class="errors" id="errBox" style="display:none"><b>入力エラーがあります。修正してください:</b><ul id="errList"></ul></div>
     <div class="table-wrap"><table id="grid"><thead></thead><tbody></tbody></table></div>
     <div class="row-actions">
       <button class="btn-ghost" onclick="addRow()">＋ 明細行を追加</button>
       <button class="btn-primary" id="exportBtn" onclick="doExport()">確認しました — CSVを出力する</button>
-      <span class="muted">出力先: 印刷勘太郎 連携フォルダ（設定: config.yaml）</span>
+      <span class="muted" id="exportNote"></span>
     </div>
   </section>
 
   <section class="card" id="doneCard" style="display:none">
     <h2>出力完了</h2>
     <div class="success">
-      CSVを連携フォルダに保存しました: <span class="fname" id="outName"></span><br>
-      <span class="muted">.done ファイルを作成済み。印刷勘太郎がSFTPで取り込みます。</span>
+      CSVを保存しました: <span class="fname" id="outName"></span><br>
+      <span class="muted">.done ファイルを作成済み。</span>
     </div>
+    <div id="sftpBox"></div>
     <div class="row-actions">
       <a id="dlLink" href="#"><button class="btn-ghost">CSVをダウンロードして確認</button></a>
       <button class="btn-primary" onclick="reset()">次の発注書を処理する</button>
@@ -119,21 +127,28 @@
 <footer>本アプリは AI の読取結果を人が確認・確定してから基幹システムへ連携する運用を前提としています。</footer>
 
 <script>
-let COLUMNS = [], rows = [], sourceFile = "", curTab = "incoming";
+let COLUMNS = [], rows = [], sourceFile = "", curTab = "incoming", SFTP_PUSH = false;
 
 async function init(){
-  const cfg = await (await fetch("/api/config")).json();
-  COLUMNS = cfg.columns;
+  const res = await fetch("/api/config");
+  if(res.status === 401){ location.href = "/login.html"; return; }
+  const cfg = await res.json();
+  COLUMNS = cfg.columns; SFTP_PUSH = cfg.sftp_push;
+  document.getElementById("whoami").textContent = cfg.user ? cfg.user + " さん" : "";
+  document.getElementById("exportNote").textContent = SFTP_PUSH
+    ? "出力後、印刷勘太郎サーバーへSFTP送信します"
+    : "出力先: 連携フォルダ（勘太郎がSFTPで取込）";
   renderHead();
   loadFiles();
 }
 function renderHead(){
   document.querySelector("#grid thead").innerHTML =
-    "<tr>" + COLUMNS.map(c=>`<th>${c.label}${c.required?'<span class="req">＊</span>':''}</th>`).join("") + "<th></th></tr>";
+    "<tr><th>読取元</th>" + COLUMNS.map(c=>`<th>${c.label}${c.required?'<span class="req">＊</span>':''}</th>`).join("") + "<th></th></tr>";
 }
 function renderBody(){
   document.querySelector("#grid tbody").innerHTML = rows.map((r,i)=>
-    "<tr>" + COLUMNS.map(c=>
+    `<tr><td class="src" title="${esc(r._source||"手入力")}">${esc(r._source||"手入力")}</td>` +
+    COLUMNS.map(c=>
       `<td data-k="${c.key}"><input value="${esc(r[c.key]||"")}" oninput="rows[${i}]['${c.key}']=this.value"></td>`
     ).join("") + `<td style="text-align:center"><button class="btn-ghost" style="padding:2px 10px" onclick="rows.splice(${i},1);renderBody()">削除</button></td></tr>`
   ).join("");
@@ -145,23 +160,27 @@ function setStep(n){ [1,2,3].forEach(i=>document.getElementById("st"+i).classLis
 const drop = document.getElementById("drop"), fi = document.getElementById("fileInput");
 ["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("over")}));
 ["dragleave","drop"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove("over")}));
-drop.addEventListener("drop",ev=>{ if(ev.dataTransfer.files[0]) upload(ev.dataTransfer.files[0]); });
-fi.addEventListener("change",()=>{ if(fi.files[0]) upload(fi.files[0]); });
+drop.addEventListener("drop",ev=>{ if(ev.dataTransfer.files.length) upload([...ev.dataTransfer.files]); });
+fi.addEventListener("change",()=>{ if(fi.files.length) upload([...fi.files]); });
 
-async function upload(file){
+async function upload(files){
   const st = document.getElementById("uploadStatus");
   st.style.display = "block";
-  st.innerHTML = '<span class="spinner"></span>AIが発注書を読み取っています…（数十秒かかる場合があります）';
-  const fd = new FormData(); fd.append("file", file);
+  st.innerHTML = `<span class="spinner"></span>AIが発注書 ${files.length}件 を読み取っています…（1件あたり数十秒かかる場合があります）`;
+  const fd = new FormData();
+  files.forEach(f=>fd.append("files", f));
   try{
     const res = await fetch("/api/extract",{method:"POST",body:fd});
+    if(res.status === 401){ location.href = "/login.html"; return; }
     const j = await res.json();
     if(!res.ok) throw new Error(j.detail || "読み取りに失敗しました");
-    rows = j.orders; sourceFile = j.source_file;
-    st.textContent = `読み取り完了: ${file.name}（${rows.length}明細）`;
-    const note = document.getElementById("aiNote");
-    if(j.confidence_note){ note.style.display="block"; note.textContent = "AIからの注意: " + j.confidence_note; }
-    else note.style.display="none";
+    rows = j.orders; sourceFile = files.map(f=>f.name).join(", ");
+    const okCount = j.results.filter(r=>r.ok).length;
+    st.textContent = `読み取り完了: ${okCount}/${j.results.length}件成功（合計 ${rows.length}明細）`;
+    document.getElementById("fileSummary").innerHTML =
+      "<ul>" + j.results.map(r=>
+        `<li>${r.ok?"✔":"✖"} ${esc(r.file)} — ${r.ok? r.rows+"明細" : "読取失敗"}${r.note? "<span class='muted'>（"+esc(r.note)+"）</span>":""}</li>`
+      ).join("") + "</ul>";
     document.getElementById("reviewCard").style.display="block";
     document.getElementById("doneCard").style.display="none";
     renderBody(); setStep(2);
@@ -176,6 +195,7 @@ async function doExport(){
   try{
     const res = await fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},
       body: JSON.stringify({rows, source_file: sourceFile})});
+    if(res.status === 401){ location.href = "/login.html"; return; }
     const j = await res.json();
     if(!j.ok){
       errBox.style.display="block";
@@ -185,6 +205,11 @@ async function doExport(){
     errBox.style.display="none";
     document.getElementById("outName").textContent = j.filename;
     document.getElementById("dlLink").href = "/api/download/" + encodeURIComponent(j.filename);
+    const sb = document.getElementById("sftpBox");
+    sb.innerHTML = j.sftp
+      ? (j.sftp.ok ? `<div class="success">SFTP送信: ${esc(j.sftp.message)}</div>`
+                   : `<div class="warn">SFTP送信: ${esc(j.sftp.message)}</div>`)
+      : "";
     document.getElementById("doneCard").style.display="block";
     setStep(3); loadFiles();
     document.getElementById("doneCard").scrollIntoView({behavior:"smooth"});
@@ -206,7 +231,9 @@ function switchTab(el){
   el.classList.add("active"); curTab = el.dataset.tab; loadFiles();
 }
 async function loadFiles(){
-  const j = await (await fetch("/api/files")).json();
+  const res = await fetch("/api/files");
+  if(res.status === 401){ location.href = "/login.html"; return; }
+  const j = await res.json();
   const list = j[curTab] || [];
   document.getElementById("fileList").innerHTML = list.length
     ? list.map(f=>`<div class="file"><span class="fn">${esc(f.name)}</span>
