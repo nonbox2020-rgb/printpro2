@@ -60,6 +60,16 @@
   .badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#e8f3ec;color:var(--ok);border:1px solid #b5d4c1}
   .badge.ng{background:#fbe9e5;color:#8a2a18;border-color:#e0b0a5}
   .muted{color:var(--sub);font-size:12px}
+  td.stat{padding:6px 8px;font-size:11px;white-space:nowrap;background:#fafaf7}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 9px;border-radius:10px}
+  .pill.new{background:#e8f0f8;color:var(--ink);border:1px solid #b9cde0}
+  .pill.upd{background:#fdece2;color:#a04a10;border:1px solid #ecc39f}
+  .pill.same{background:#eee;color:var(--sub);border:1px solid var(--line)}
+  td input.changed{background:#fdece2}
+  .notif{font-size:13px}
+  .notif .n{padding:9px 4px;border-bottom:1px solid var(--line)}
+  .notif .n b{color:#a04a10}
+  .notif .diff{color:var(--sub);font-size:12px;margin-left:14px}
   .filesum{font-size:13px;margin-bottom:10px}
   .filesum li{margin-left:20px}
   footer{max-width:1180px;margin:0 auto;padding:0 20px 30px;color:var(--sub);font-size:12px}
@@ -114,6 +124,11 @@
     </div>
   </section>
 
+  <section class="card" id="notifCard" style="display:none">
+    <h2>発注書の更新通知</h2>
+    <div class="notif" id="notifList"></div>
+  </section>
+
   <section class="card">
     <h2>連携フォルダの状況</h2>
     <div class="tabs">
@@ -127,7 +142,7 @@
 <footer>本アプリは AI の読取結果を人が確認・確定してから基幹システムへ連携する運用を前提としています。</footer>
 
 <script>
-let COLUMNS = [], rows = [], sourceFile = "", curTab = "incoming", SFTP_PUSH = false;
+let COLUMNS = [], rows = [], checks = [], sourceFile = "", curTab = "incoming", SFTP_PUSH = false;
 
 async function init(){
   const res = await fetch("/api/config");
@@ -140,21 +155,41 @@ async function init(){
     : "出力先: 連携フォルダ（勘太郎がSFTPで取込）";
   renderHead();
   loadFiles();
+  loadNotifs();
+}
+async function loadNotifs(){
+  try{
+    const res = await fetch("/api/notifications");
+    if(!res.ok) return;
+    const list = (await res.json()).notifications;
+    if(!list.length) return;
+    document.getElementById("notifCard").style.display="block";
+    document.getElementById("notifList").innerHTML = list.map(n=>
+      `<div class="n"><b>更新</b> ${esc(n.at)} ｜ 受注番号 ${esc(n.order_no)}（${esc(n.item_name)}）
+       <div class="diff">${n.changes.map(c=>esc(c.label)+": "+esc(c.old)+" → "+esc(c.new)).join("　／　")}</div></div>`
+    ).join("");
+  }catch(e){}
 }
 function renderHead(){
   document.querySelector("#grid thead").innerHTML =
-    "<tr><th>読取元</th>" + COLUMNS.map(c=>`<th>${c.label}${c.required?'<span class="req">＊</span>':''}</th>`).join("") + "<th></th></tr>";
+    "<tr><th>状態</th><th>読取元</th>" + COLUMNS.map(c=>`<th>${c.label}${c.required?'<span class="req">＊</span>':''}</th>`).join("") + "<th></th></tr>";
 }
 function renderBody(){
-  document.querySelector("#grid tbody").innerHTML = rows.map((r,i)=>
-    `<tr><td class="src" title="${esc(r._source||"手入力")}">${esc(r._source||"手入力")}</td>` +
+  document.querySelector("#grid tbody").innerHTML = rows.map((r,i)=>{
+    const chk = checks[i] || {status:"new", changes:[]};
+    const changedKeys = new Set(chk.changes.map(c=>c.key));
+    const pill = chk.status==="updated"
+        ? `<span class="pill upd" title="${esc(chk.changes.map(c=>c.label+": "+c.old+" → "+c.new).join("\n"))}">更新</span>`
+      : chk.status==="unchanged" ? '<span class="pill same">同一</span>'
+      : '<span class="pill new">新規</span>';
+    return `<tr><td class="stat">${pill}</td><td class="src" title="${esc(r._source||"手入力")}">${esc(r._source||"手入力")}</td>` +
     COLUMNS.map(c=>
-      `<td data-k="${c.key}"><input value="${esc(r[c.key]||"")}" oninput="rows[${i}]['${c.key}']=this.value"></td>`
-    ).join("") + `<td style="text-align:center"><button class="btn-ghost" style="padding:2px 10px" onclick="rows.splice(${i},1);renderBody()">削除</button></td></tr>`
-  ).join("");
+      `<td data-k="${c.key}"><input class="${changedKeys.has(c.key)?"changed":""}" value="${esc(r[c.key]||"")}" oninput="rows[${i}]['${c.key}']=this.value"></td>`
+    ).join("") + `<td style="text-align:center"><button class="btn-ghost" style="padding:2px 10px" onclick="rows.splice(${i},1);checks.splice(${i},1);renderBody()">削除</button></td></tr>`;
+  }).join("");
 }
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;")}
-function addRow(){ rows.push({}); renderBody(); }
+function addRow(){ rows.push({}); checks.push({status:"new",changes:[]}); renderBody(); }
 function setStep(n){ [1,2,3].forEach(i=>document.getElementById("st"+i).classList.toggle("active", i===n)); }
 
 const drop = document.getElementById("drop"), fi = document.getElementById("fileInput");
@@ -175,8 +210,15 @@ async function upload(files){
     const j = await res.json();
     if(!res.ok) throw new Error(j.detail || "読み取りに失敗しました");
     rows = j.orders; sourceFile = files.map(f=>f.name).join(", ");
+    checks = [];
+    try{
+      const cres = await fetch("/api/check",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rows})});
+      if(cres.ok) checks = (await cres.json()).results;
+    }catch(e){}
+    const updCount = checks.filter(c=>c.status==="updated").length;
     const okCount = j.results.filter(r=>r.ok).length;
-    st.textContent = `読み取り完了: ${okCount}/${j.results.length}件成功（合計 ${rows.length}明細）`;
+    st.textContent = `読み取り完了: ${okCount}/${j.results.length}件成功（合計 ${rows.length}明細`
+      + (updCount ? `、うち ${updCount}明細は登録済み発注の更新` : "") + "）";
     document.getElementById("fileSummary").innerHTML =
       "<ul>" + j.results.map(r=>
         `<li>${r.ok?"✔":"✖"} ${esc(r.file)} — ${r.ok? r.rows+"明細" : "読取失敗"}${r.note? "<span class='muted'>（"+esc(r.note)+"）</span>":""}</li>`
@@ -203,14 +245,29 @@ async function doExport(){
       return;
     }
     errBox.style.display="none";
-    document.getElementById("outName").textContent = j.filename;
+    if(!j.filename){
+      errBox.style.display="none";
+      alert(j.message || "出力対象がありませんでした");
+      return;
+    }
+    document.getElementById("outName").textContent = j.filename
+      + `（新規${j.summary.new}・更新${j.summary.updated}` 
+      + (j.summary.unchanged? `・同一スキップ${j.summary.unchanged}`:"") + "）";
     document.getElementById("dlLink").href = "/api/download/" + encodeURIComponent(j.filename);
     const sb = document.getElementById("sftpBox");
-    sb.innerHTML = j.sftp
+    let updHtml = "";
+    if(j.changed && j.changed.length){
+      updHtml = `<div class="warn"><b>発注書の更新を検出しました:</b><ul style="margin-left:18px">`
+        + j.changed.map(n=>`<li>受注番号 ${esc(n.order_no)}（${esc(n.item_name)}）: `
+            + n.changes.map(c=>`${esc(c.label)} ${esc(c.old)} → <b>${esc(c.new)}</b>`).join("、") + "</li>").join("")
+        + "</ul></div>";
+    }
+    sb.innerHTML = updHtml + (j.sftp
       ? (j.sftp.ok ? `<div class="success">SFTP送信: ${esc(j.sftp.message)}</div>`
                    : `<div class="warn">SFTP送信: ${esc(j.sftp.message)}</div>`)
-      : "";
+      : "");
     document.getElementById("doneCard").style.display="block";
+    loadNotifs();
     setStep(3); loadFiles();
     document.getElementById("doneCard").scrollIntoView({behavior:"smooth"});
   }catch(e){ alert("出力エラー: " + e.message); }
@@ -218,7 +275,7 @@ async function doExport(){
 }
 
 function reset(){
-  rows=[]; sourceFile="";
+  rows=[]; checks=[]; sourceFile="";
   document.getElementById("reviewCard").style.display="none";
   document.getElementById("doneCard").style.display="none";
   const st = document.getElementById("uploadStatus");
