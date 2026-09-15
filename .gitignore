@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# アプリが生成するデータ（発注書・台帳・出力CSVは顧客情報を含むためコミットしない）
+data/
+app.log
+
+# 環境変数・秘密情報
+.env
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
