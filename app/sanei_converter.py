@@ -114,7 +114,7 @@ class SaneiConverter:
                           "warnings": case_w})
         for (section, no), cnt in dropped_all_ura.items():
             warnings.append(f"[裏のみ] {section} 受注№{no}: {cnt}行すべて「裏」→ "
-                            f"CSV-B生成なし(仕様どおりか要確認②)")
+                            f"CSV-B生成なし(仕様どおり。表の処理で完結済み)")
         return {"plate_date": plate_date, "cases": cases, "warnings": warnings}
 
     # ---------------- 1行分の各列を計算 ----------------
@@ -283,13 +283,15 @@ class SaneiConverter:
         quoting = {"all": csv.QUOTE_ALL, "minimal": csv.QUOTE_MINIMAL,
                    "none": csv.QUOTE_NONE}[out.get("quoting", "minimal")]
         w = csv.writer(buf, quoting=quoting, lineterminator=out.get("newline", "\r\n"))
+        nl = out.get("cell_newline", "crlf")
+        fix = lambda v: self._apply_cell_newline(v, nl)
         if out.get("header", True):
-            w.writerow([col["label"] for col in cols])
+            w.writerow([fix(col["label"]) for col in cols])
         for i, brow in enumerate(case["b_rows"]):
             if i == 0:
-                line = [brow.get(col["key"], "") for col in cols]
+                line = [fix(brow.get(col["key"], "")) for col in cols]
             else:  # 継続行: per_row の列のみ、他は空
-                line = [brow.get(col["key"], "") if col.get("per_row") else ""
+                line = [fix(brow.get(col["key"], "")) if col.get("per_row") else ""
                         for col in cols]
             w.writerow(line)
         data = buf.getvalue()
@@ -304,6 +306,20 @@ class SaneiConverter:
                           seg=case["section"])
 
     # ---------------- 補助 ----------------
+
+    @staticmethod
+    def _apply_cell_newline(value: str, mode: str) -> str:
+        """セル内改行の正規化。まずLF/CRLF/CRをLFに揃えてから mode に従い変換。"""
+        if not value:
+            return value
+        v = value.replace("\r\n", "\n").replace("\r", "\n")
+        if mode == "crlf":
+            return v.replace("\n", "\r\n")   # ファイル全体をCRLFに統一
+        if mode == "space":
+            return v.replace("\n", " ")
+        if mode == "remove":
+            return v.replace("\n", "")
+        return v                             # keep: LFのまま(見本と同じ)
 
     @staticmethod
     def _cell(row: list, idx: int) -> str:
