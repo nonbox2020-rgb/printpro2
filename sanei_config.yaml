@@ -1,0 +1,194 @@
+# =============================================================
+# 三映CSV(CSV-A) → 印刷勘太郎向けCSV(CSV-B) 変換ルール設定
+#
+# このファイルだけで変換仕様を調整できるようにする(コード変更不要)。
+# GAS版に移す際は、この内容をスプレッドシートの各シートへ転記する。
+#
+# 出典と確定状況:
+#   [確定]   … 実ファイル(CSV-A 3本 / CSV-B 見本)で確認済み
+#   [仕様書] … 岩崎様の概要資料(xlsx)にもとづく。実変換例では未検証
+#   [要確認] … 岩崎様へ確認中(メール①〜③)。暫定値で実装
+# =============================================================
+
+# --- CSV-A(入力)の形式 [確定] ---
+input:
+  encoding: cp932          # Shift_JIS。文字化け時は utf-8 にフォールバック
+  # 列インデックス(0始まり)。実ファイルのヘッダー行と一致
+  columns:
+    order_seq: 0           # A 順
+    order_no: 1            # B 受注№
+    title: 2               # C 作品名
+    kind: 3                # D 種類
+    plate_down: 4          # E 下版
+    side: 5                # F 裏表 (表/裏)
+    dimension: 6           # G 寸法
+    paper: 7               # H 用紙
+    weight: 8              # I 斤量
+    through: 9             # J 通し (=印刷枚数)
+    color: 10             # K 色 (4/4c 等)
+    copies: 11            # L 部数 (=数量)
+    note: 12             # M 備考
+    process: 13          # N 加工
+  # 1行目(タイトル行)から下版予定日を取るセル位置
+  title_date_col: 8        # I列 例:"2026-08-27 予定"
+  header_first_cell: "順"  # 見出し行の判定(A列がこれなら見出し)
+  proof_marker: "本機校正"  # 空白行後のこの文字を含む行=校正セクションの開始
+
+# --- 裏表フィルタ [確定] ---
+skip_side_value: "裏"      # F列がこの値の行は読み込まない
+
+# --- CSV-B(出力)の形式 [確定(見本)/最終は勘太郎仕様書 B-8] ---
+output:
+  encoding: utf-8          # 見本はUTF-8(BOMなし)。勘太郎確定後 cp932 等へ変更可
+  bom: false
+  quoting: minimal         # 改行/カンマを含むセルのみ " で囲む(見本準拠)
+  newline: "\r\n"          # レコード区切りCRLF、セル内改行はLF(csvモジュール既定)
+  header: true
+  date_format: "%Y/%m/%d"  # 例 2026/08/24 (ゼロ埋め)
+  # 1案件1ファイル。{no}=受注№ {date}=下版予定日 {seg}=本番/校正
+  filename_pattern: "{date}_{no}_{seg}.csv"
+
+# --- 固定値 [仕様書](test見本と一部相違。相違はレポートで表示) ---
+fixed:
+  sales_code: "S0005"      # A 営業コード
+  customer_code: "00332"   # B 得意先コード [要確認③ ゼロ埋め5桁]
+  edition: "新版"          # D 版別
+  pages: "2"               # F ページ数
+  delivery_time: "朝"      # J 納品時間 (見本は"あさ")
+  paper_arrange: "先方"    # K 用紙手配先
+  plate_form: "データ支給" # L 下版形態
+  platemaking: "社内"      # M 製版先
+  units: "1"               # V 台数
+  print_place: "社内"      # Z 印刷場所
+  delivery_method: "先方引取"  # AC 納品方法 (見本は"引き取り")
+  invoice: "無"            # AE 指定納品書
+
+# --- 品名の組み立て [仕様書/要確認①] ---
+product_name:
+  # 連結する入力列(順番どおり)。受注№を含めるかは確認中(メール①)
+  parts: [order_no, title, kind]
+  separator: " "           # 半角スペース
+  proof_suffix: "本機校正"  # 校正セクションでは末尾に付加
+
+# --- 用紙サイズ(O)・印刷サイズ(W) 変換表 [仕様書 B-2] ---
+# 表にあれば表を優先。無ければ規則で推定し、レポートに「推定」と表示。
+size_table:
+  "菊全判":   { paper: "菊判",  print: "菊全" }
+  "菊半裁":   { paper: "菊判",  print: "菊半" }
+  "4/6全":    { paper: "46判",  print: "46全" }
+  "4/6半裁":  { paper: "46判",  print: "46半" }
+  "L全判":    { paper: "L判",   print: "L全" }
+  "L半裁":    { paper: "L判",   print: "L半" }
+  "K全判":    { paper: "K判",   print: "K全" }
+  "K半裁":    { paper: "K判",   print: "K半" }
+  "A全判":    { paper: "A判",   print: "A全" }
+  "A半裁":    { paper: "A判",   print: "A半" }
+  "B全判":    { paper: "B判",   print: "B全" }
+  "B半裁":    { paper: "B判",   print: "B半" }
+# 規則推定用のプレフィックス変換(4/6→46 等)
+size_prefix_map:
+  "4/6": "46"
+
+# --- 仕上サイズ(E) 定型サイズ判定 [仕様書 B-1] ---
+# 種類(D列)を正規化(全角→半角)して先頭一致で判定。該当なしは空白。
+trim_size:
+  dvd_jacket_source: "DVDジャケット"   # 種類にこれを含めば
+  dvd_jacket_value: "DVDジャケ"        # この値にする
+  # 正規表現(NFKC正規化後)→ 出力。上から順に最初の一致を採用
+  patterns:
+    - { re: "^(B[0-9])",  out: "$1" }   # B1ポスター → B1
+    - { re: "^(A[0-9])",  out: "$1" }   # A4チラシ  → A4
+
+# --- 印刷項目(R) 備考からの抽出 [仕様書 B-4] ---
+# 備考(M列)から最初に一致したものを採用。両方ある場合の優先は確認中。
+print_item:
+  patterns:
+    - "表紙"
+    - "[0-9０-９,，\\.]+折"      # 1折 / 2,3折 など
+
+# --- 色数分解(S表/T裏) [確定] ---
+# K列(色) 例 4/4c→(4,4)  4→(4,0)  5/1c→(5,1)  2/2c→(2,2)
+color:
+  strip_chars: "cCｃＣ"        # 末尾の色記号を除去
+  default_back: "0"           # スラッシュが無い場合の裏
+
+# --- 納品日(I) 営業日計算 [仕様書/要確認 T参照行] ---
+delivery:
+  side_color_zero_offset: 1   # 裏色数(T)=0 のとき 下版予定日+1営業日
+  side_color_nonzero_offset: 2 # T≠0 のとき +2営業日
+  # 土日+下記祝日+自社休業日を営業日から除外(GAS版はGoogleカレンダー参照)
+  holidays_2026:
+    - 2026/01/01
+    - 2026/01/12
+    - 2026/02/11
+    - 2026/02/23
+    - 2026/03/20
+    - 2026/04/29
+    - 2026/05/03
+    - 2026/05/04
+    - 2026/05/05
+    - 2026/05/06
+    - 2026/07/20
+    - 2026/08/11
+    - 2026/09/21
+    - 2026/09/22
+    - 2026/09/23
+    - 2026/10/12
+    - 2026/11/03
+    - 2026/11/23
+  company_closed: []          # お盆・年末年始など[要確認 B-5]
+
+# --- 備考文面テンプレート [仕様書] ---
+# ジャケ判定: 仕上サイズ(E)が "DVDジャケ" のとき jacket 側を使用。
+# 「校正×ジャケ」は仕様書に文面なし[要確認 A-5(旧)]→ 発生時は警告。
+templates:
+  delivery_note:              # AF 納品先・備考
+    main: "橋本さんへ\n刷りだし5枚+支給品  刷版ケースは　三映　三浦さんが取ります\n新富運輸　　先方手配　刷り本引き取りです"
+    proof: "三映　三浦さんが引き取りです"
+  plate_note:                 # AG 刷版備考
+    main: "三映様分　先方のアクセサリー等は取らない（先方の受注番号や先方の　作業詳細有り）\n●面付け"
+    jacket: "金主任　　三映様分の　ジャケット案件\nセンター白を統一で開けて焼いてください\n\n三映様分　先方のアクセサリー等は取らない（先方の受注番号や先方の　作業詳細有り）\n●面付け"
+    proof: "三映様分　先方のアクセサリー等は取らない（先方の受注番号や先方の　作業詳細有り）"
+  print_note:                 # AH 印刷備考
+    main: "本番です　本機校正　に色合わせです\n●●●シートで　付箋（駒取りして下さい）　　加工予備　●●●シート以上付けて下さい　刷りだし1枚だけ文京事務所に下さい　　刷りだし5枚+支給品は刷版ケースに入れて橋本さん渡して下さい　別指示書の　三映様分同梱して下さい"
+    jacket: "プリモ見本合わせです　　100シートで付箋（駒取りして下さい）　　加工予備／150シート以上付けて下さい　　★三映様分のジャケットは引き取り日が同じ案件は、枚数が少ない場合はアイ紙挟んで別案件のジャケット刷り本積んで下さい　　刷りだし1枚だけ文京事務所に下さい　　刷りだし5枚+支給品は刷版ケースに入れて橋本さん渡して下さい　　別指示書の三映様分同梱して下さい"
+    proof: "本機校正　1回目　\n先方支給　　色見本に　なるべく色よせて下さい\n校正　1枚だけ文京事務所に下さい\n校正20枚+支給品は　刷版ケースに入れて橋本さんに渡して下さい三映様分校正は　まとめて刷版ケース入れて下さい"
+
+# --- CSV-B 35列の定義(並び順・見出し。継続行で使う列の指定) [確定] ---
+# per_row=true: 2行目以降(継続行)でも値を入れる列(N〜AB のうち U以外)
+csv_b_columns:
+  - { key: sales_code,     label: "営業コード" }
+  - { key: customer_code,  label: "得意先コード" }
+  - { key: product_name,   label: "品名" }
+  - { key: edition,        label: "版別" }
+  - { key: trim_size,      label: "仕上サイズ" }
+  - { key: pages,          label: "ページ数" }
+  - { key: quantity,       label: "数量" }
+  - { key: plate_date,     label: "下版予定日" }
+  - { key: delivery_date,  label: "納品日" }
+  - { key: delivery_time,  label: "納品時間" }
+  - { key: paper_arrange,  label: "用紙手配先" }
+  - { key: plate_form,     label: "下版形態" }
+  - { key: platemaking,    label: "製版先" }
+  - { key: paper_brand,    label: "用紙銘柄",  per_row: true }
+  - { key: paper_size,     label: "用紙サイズ", per_row: true }
+  - { key: grain,          label: "紙目",      per_row: true }
+  - { key: weight,         label: "斤量",      per_row: true }
+  - { key: print_item,     label: "印刷項目",  per_row: true }
+  - { key: color_front,    label: "色数（表）", per_row: true }
+  - { key: color_back,     label: "色数（裏）", per_row: true }
+  - { key: imposition,     label: "面付" }
+  - { key: units,          label: "台数",      per_row: true }
+  - { key: print_size,     label: "印刷サイズ", per_row: true }
+  - { key: print_sheets,   label: "印刷枚数",  per_row: true }
+  - { key: spare,          label: "予備",      per_row: true }
+  - { key: print_place,    label: "印刷場所",  per_row: true }
+  - { key: print_start,    label: "印刷開始日", per_row: true }
+  - { key: print_end,      label: "印刷終了日", per_row: true }
+  - { key: delivery_method, label: "納品方法" }
+  - { key: shipper,        label: "荷主名" }
+  - { key: invoice,        label: "指定納品書" }
+  - { key: delivery_note,  label: "納品先・備考" }
+  - { key: plate_note,     label: "刷版備考" }
+  - { key: print_note,     label: "印刷備考" }
+  - { key: bind_note,      label: "製本備考" }
