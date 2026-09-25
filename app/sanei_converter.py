@@ -31,37 +31,77 @@ class SaneiConverter:
     def parse_csv_a(self, text: str) -> dict:
         """CSV-A本文を解釈し、下版予定日とセクション別データ行を返す。
 
+        列は位置ではなく見出し行の名前(順・受注№・寸法…)で探す。列が増えたり
+        並びが変わったりしても正しく読め、必要な列が無ければ推測せずエラーにする。
+
         戻り値: {"plate_date": "YYYY/MM/DD" or "", "rows": [(section, row_list), ...]}
-        section は "本番" または "校正"。row_list は元の1行(list)。
+        section は "本番" または "校正"。row_list は input.columns の標準の並びに
+        揃え直した1行(list)。
         """
         rows = list(csv.reader(io.StringIO(text, newline="")))
-        if not rows:
-            return {"plate_date": "", "rows": []}
-
-        # 1行目(タイトル行)のI列から日付を取り出す
-        dcol = self.cfg["input"]["title_date_col"]
-        raw_date = rows[0][dcol] if len(rows[0]) > dcol else ""
-        plate_date = self._parse_date(raw_date)
-
-        header_first = self.cfg["input"]["header_first_cell"]
         proof_marker = self.cfg["input"]["proof_marker"]
 
-        out_rows = []
-        section = "本番"
-        for idx, r in enumerate(rows):
-            if idx == 0:
-                continue  # タイトル行
-            first = (r[0].strip() if r else "")
+        out_rows, colmap, section, plate_date = [], None, "本番", ""
+        for r in rows:
             if self._is_blank(r):
-                continue  # 空白行(セクション境界。次のマーカー行で校正へ切替)
-            # 校正タイトル行: A列が空 かつ 本機校正 を含む
-            if first == "" and proof_marker in "".join(r):
+                continue  # 空白行(セクション境界。次の校正タイトル行で校正へ切替)
+            found = self._header_map(r)
+            if found is not None:
+                colmap = found  # 見出し行(本番・校正それぞれの先頭にある)
+                continue
+            if colmap is None:
+                plate_date = plate_date or self._title_date(r)  # 最初の見出しより前=タイトル行
+                continue
+            # 校正タイトル行: 受注№が無く「本機校正」を含む行(備考に本機校正とある明細は対象外)
+            if proof_marker in "".join(r) and not self._cell(r, colmap["order_no"]).strip():
                 section = "校正"
                 continue
-            if first == header_first:
-                continue  # 見出し行
-            out_rows.append((section, r))
+            out_rows.append((section, self._canonical(r, colmap)))
+        if rows and colmap is None:
+            raise ValueError("三映CSVの見出し行(順・受注№・寸法…)が見つかりません。"
+                             "三映から届いた元のCSVかどうか確認してください")
         return {"plate_date": plate_date, "rows": out_rows}
+
+    def _header_map(self, row: list):
+        """見出し行なら {項目: 列位置} を返す。見出し行でなければ None。
+
+        必須の見出しが欠けていれば、列を取り違えたまま変換しないようエラーにする。
+        """
+        spec = self.cfg["input"]["header_names"]
+        norm = [self._norm_header(c) for c in row]
+        found = {}
+        for key, names in spec.items():
+            cands = {self._norm_header(n) for n in names}
+            idx = next((i for i, h in enumerate(norm) if h in cands), None)
+            if idx is not None:
+                found[key] = idx
+        if len(found) < 5:  # 見出し名がほとんど無い行 = タイトル行・データ行
+            return None
+        missing = [k for k in self.cfg["input"]["required_headers"] if k not in found]
+        if missing:
+            raise ValueError("三映CSVの見出し行に必要な列がありません: "
+                             + "・".join(spec[k][0] for k in missing)
+                             + "(見出し行: " + "・".join(c.strip() for c in row if c.strip()) + ")")
+        return found
+
+    def _canonical(self, row: list, colmap: dict) -> list:
+        """ファイルごとの列順を、input.columns の標準の並びに揃える。"""
+        out = [""] * (max(self.cols.values()) + 1)
+        for key, i in colmap.items():
+            if key in self.cols:
+                out[self.cols[key]] = self._cell(row, i)
+        return out
+
+    def _title_date(self, row: list) -> str:
+        """タイトル行から日付を探す。既定の列(title_date_col)を優先し、無ければ行全体から。"""
+        dcol = self.cfg["input"].get("title_date_col", -1)
+        cells = ([row[dcol]] if 0 <= dcol < len(row) else []) + list(row)
+        return next((d for d in map(self._parse_date, cells) if d), "")
+
+    @staticmethod
+    def _norm_header(s: str) -> str:
+        """見出しの表記ゆれを吸収(全角/半角・№/No・空白)。"""
+        return re.sub(r"\s", "", unicodedata.normalize("NFKC", s or ""))
 
     def convert(self, text: str) -> dict:
         """CSV-A本文 → 案件リスト。
@@ -294,10 +334,12 @@ class SaneiConverter:
                 line = [fix(brow.get(col["key"], "")) if col.get("per_row") else ""
                         for col in cols]
             w.writerow(line)
-        data = buf.getvalue()
-        if out.get("bom") and out.get("encoding", "utf-8").startswith("utf-8"):
-            return b"\xef\xbb\xbf" + data.encode(out["encoding"])
-        return data.encode(out.get("encoding", "utf-8"))
+        enc = out.get("encoding", "utf-8")
+        body = buf.getvalue().encode(enc)
+        # BOM: 日本語版Excelが UTF-8 と判定するための目印。utf-8-sig は自前で付けるので二重にしない
+        if out.get("bom") and enc.lower().startswith("utf") and not body.startswith(b"\xef\xbb\xbf"):
+            body = b"\xef\xbb\xbf" + body
+        return body
 
     def filename_for(self, case: dict, plate_date: str) -> str:
         pat = self.cfg["output"]["filename_pattern"]

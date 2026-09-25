@@ -75,8 +75,12 @@ def run():
 
     # CSV-B構造: 1行目=全35列、継続行=N〜AB(U除く)のみ
     b = conv.build_csv_b(main)
-    assert b.decode("utf-8").count("\r\n") >= 2  # ヘッダ+2データ行
-    rows = list(csv.reader(io.StringIO(b.decode("utf-8"), newline="")))
+    # BOM付き: 無いと日本語版ExcelがShift_JISとして開き文字化けする(BOMは1つだけ)
+    assert b.startswith(b"\xef\xbb\xbf") and not b[3:].startswith(b"\xef\xbb\xbf")
+    text = b.decode("utf-8-sig")
+    assert text.startswith("営業コード,得意先コード,"), text[:20]
+    assert text.count("\r\n") >= 2  # ヘッダ+2データ行
+    rows = list(csv.reader(io.StringIO(text, newline="")))
     assert len(rows) == 3 and all(len(r) == 35 for r in rows)
     # 継続行(rows[2]): A〜M と U,AC〜AI は空
     labels = [c["label"] for c in CFG["csv_b_columns"]]
@@ -84,6 +88,34 @@ def run():
     for lbl, val in zip(labels, rows[2]):
         if lbl not in per_row:
             assert val == "", f"継続行の非per_row列 {lbl} が空でない: {val!r}"
+
+    # 列の追加・並び替えがあっても見出し名で正しく読める(以前は列の位置で読んだため、
+    # 先頭に1列多いファイルで受注№・数量・用紙などが軒並みずれた)
+    base = [(c["section"], c["order_no"], conv.build_csv_b(c)) for c in res["cases"]]
+    src = list(csv.reader(io.StringIO(SAMPLE, newline="")))
+
+    def variant(fn):
+        buf = io.StringIO()
+        csv.writer(buf, lineterminator="\r\n").writerows(fn(r) for r in src)
+        return buf.getvalue()
+
+    for label, fn in [("先頭に列を追加", lambda r: ["x"] + r),
+                      ("用紙と斤量を入れ替え", lambda r: r[:7] + [r[8], r[7]] + r[9:])]:
+        v = conv.convert(variant(fn))
+        assert v["plate_date"] == "2026/09/01", label
+        assert [(c["section"], c["order_no"], conv.build_csv_b(c)) for c in v["cases"]] == base, label
+    # 必須の列が無ければ、取り違えたまま変換せずエラーにする
+    try:
+        conv.convert(variant(lambda r: r[:6] + r[7:]))  # 寸法の列を削除
+        raise AssertionError("寸法の列が無いのにエラーにならない")
+    except ValueError as e:
+        assert "寸法" in str(e), e
+
+    # encoding を utf-8-sig にしても BOM は二重にならない
+    cfg2 = yaml.safe_load(yaml.safe_dump(CFG))
+    cfg2["output"]["encoding"] = "utf-8-sig"
+    b2 = SaneiConverter(cfg2).build_csv_b(main)
+    assert b2.startswith(b"\xef\xbb\xbf") and not b2[3:].startswith(b"\xef\xbb\xbf")
 
     print("✅ 全テスト合格 (案件数:", len(res["cases"]),
           "/ 警告:", len(res["warnings"]), ")")

@@ -13,7 +13,25 @@
 # --- CSV-A(入力)の形式 [確定] ---
 input:
   encoding: cp932          # Shift_JIS。文字化け時は utf-8 にフォールバック
-  # 列インデックス(0始まり)。実ファイルのヘッダー行と一致
+  # 列は見出し行の名前で探す(列の追加・並び替えがあっても読める)。
+  # 見出しの表記ゆれは候補を並べる。全角/半角・№/No・空白の違いは自動で吸収する。
+  header_names:
+    order_seq: [順]
+    order_no: [受注№, 受注番号]
+    title: [作品名]
+    kind: [種類]
+    side: [裏表, 表裏]
+    dimension: [寸法]
+    paper: [用紙]
+    weight: [斤量]
+    through: [通し]
+    color: [色, 色数]
+    copies: [部数]
+    note: [備考]
+    process: [加工]
+  # これが1つでも無い見出し行は、取り違えを防ぐためエラーにする
+  required_headers: [order_no, title, kind, side, dimension, paper, weight, through, color, copies, note]
+  # 内部で扱う標準の並び(見出しで探した列をこの位置に揃える。実ファイルの列順とは無関係)
   columns:
     order_seq: 0           # A 順
     order_no: 1            # B 受注№
@@ -29,10 +47,9 @@ input:
     copies: 11            # L 部数 (=数量)
     note: 12             # M 備考
     process: 13          # N 加工
-  # 1行目(タイトル行)から下版予定日を取るセル位置
+  # タイトル行(最初の見出し行より前)から下版予定日を探す。まずこの列、無ければ行全体
   title_date_col: 8        # I列 例:"2026-08-27 予定"
-  header_first_cell: "順"  # 見出し行の判定(A列がこれなら見出し)
-  proof_marker: "本機校正"  # 空白行後のこの文字を含む行=校正セクションの開始
+  proof_marker: "本機校正"  # 受注№が無くこの文字を含む行=校正セクションの開始
 
 # --- 裏表フィルタ [確定] ---
 skip_side_value: "裏"      # F列がこの値の行は読み込まない
@@ -42,8 +59,12 @@ skip_side_value: "裏"      # F列がこの値の行は読み込まない
 # ただし「改行が文字化けした(先方で修正済)」とのこと。備考(AF/AG/AH)の
 # セル内改行が原因とみられるため cell_newline で扱いを切り替えられるようにする。
 output:
-  encoding: utf-8          # 見本はUTF-8(BOMなし)。取込OK確認済
-  bom: false
+  encoding: utf-8          # 見本はUTF-8(BOMなし)で勘太郎への取込OK確認済
+  # BOM付きにする。BOMが無いと日本語版Excelはダブルクリックで開いたときに
+  # Shift_JISとして読み、文字化けする(備考のセル内改行も崩れて行があふれる)。
+  # 勘太郎の取込はBOMなしで確認済みのため、BOM付きで一度取込テストすること。
+  # もし勘太郎が受け付けなければ false に戻す(Excelでは「データ→テキストまたはCSVから」で開く)。
+  bom: true
   quoting: minimal         # 改行/カンマを含むセルのみ " で囲む(見本準拠)
   newline: "\r\n"          # レコード区切り(CRLF)
   # セル内改行の扱い: crlf(全体をCRLFに統一) / keep(LFのまま=見本) /
