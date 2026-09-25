@@ -3,15 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>発注書CSV変換 ｜ 印刷勘太郎連携</title>
+<title>三映CSV変換 ｜ 印刷勘太郎連携</title>
 <style>
   :root{
     --ink:#1b3a5c; --ink-deep:#122a44; --paper:#f7f6f2; --card:#ffffff;
     --shu:#c8452c; --ok:#2e7d4f; --line:#dcd9d0; --sub:#6b6f76; --mono:"SFMono-Regular",Consolas,"Noto Sans Mono",monospace;
+    --perrow:#e4edf5;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:"Hiragino Sans","Yu Gothic UI","Noto Sans JP",sans-serif;background:var(--paper);color:#1c1c1c;line-height:1.6}
-  header{background:var(--ink);color:#fff;padding:14px 28px;display:flex;align-items:baseline;gap:14px}
+  header{background:var(--ink);color:#fff;padding:14px 28px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
   header h1{font-size:17px;font-weight:700;letter-spacing:.06em}
   header .sub{font-size:12px;opacity:.75}
   header .right{margin-left:auto;font-size:12px;display:flex;gap:14px;align-items:baseline}
@@ -25,88 +26,104 @@
   .step.active b,.step.active{color:#fff}
   .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:22px;margin-bottom:20px}
   h2{font-size:15px;color:var(--ink);margin-bottom:12px;padding-left:10px;border-left:4px solid var(--ink)}
-  .drop{display:block;border:2px dashed var(--line);border-radius:8px;padding:44px 20px;text-align:center;color:var(--sub);cursor:pointer;transition:.15s}
+  .drop{position:relative;display:block;border:2px dashed var(--line);border-radius:8px;padding:44px 20px;text-align:center;color:var(--sub);cursor:pointer;transition:.15s}
   .drop:hover,.drop.over{border-color:var(--ink);background:#f0f4f8}
-  .drop input{display:none}
+  .drop:focus-within{outline:2px solid var(--ink);outline-offset:2px}
+  .drop input{position:absolute;opacity:0;width:1px;height:1px}
   .drop .big{font-size:15px;color:#1c1c1c;font-weight:600;margin-bottom:4px}
   button{font:inherit;border:none;border-radius:6px;padding:9px 20px;cursor:pointer;font-weight:600}
+  button:focus-visible,a:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
   .btn-primary{background:var(--ink);color:#fff}
   .btn-primary:hover{background:var(--ink-deep)}
   .btn-primary:disabled{background:#9aa5b1;cursor:not-allowed}
   .btn-ghost{background:transparent;color:var(--ink);border:1px solid var(--ink)}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{background:#eef1ec;color:var(--ink);text-align:left;padding:8px;border:1px solid var(--line);white-space:nowrap;font-size:12px}
-  th .req{color:var(--shu);margin-left:2px}
-  td{border:1px solid var(--line);padding:0}
-  td input{width:100%;border:none;padding:8px;font:inherit;font-size:13px;background:transparent}
-  td input:focus{outline:2px solid var(--ink);outline-offset:-2px;background:#fff}
-  td.src{padding:8px;font-size:11px;color:var(--sub);white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;background:#fafaf7}
-  .table-wrap{overflow-x:auto;margin-bottom:14px}
+  .btn-ghost.sm{padding:3px 12px;font-size:12px;font-weight:600}
+  table{border-collapse:collapse;font-size:13px}
+  th{background:#eef1ec;color:var(--ink);text-align:left;padding:6px 8px;border:1px solid var(--line);white-space:nowrap;font-size:12px;vertical-align:bottom}
+  th .colL{display:block;font-family:var(--mono);font-size:10px;font-weight:400;color:var(--sub);letter-spacing:.04em}
+  th.pr{background:var(--perrow)}
+  td{border:1px solid var(--line);padding:0;vertical-align:top}
+  td input{width:100%;min-width:6.5em;border:none;padding:8px;font:inherit;font-size:13px;background:transparent}
+  td input[data-k="product_name"]{min-width:22em}
+  td input[data-k="paper_brand"]{min-width:11em}
+  td textarea{display:block;width:100%;min-width:24em;border:none;padding:8px;font:inherit;font-size:12px;line-height:1.5;background:transparent;resize:vertical}
+  td input:focus,td textarea:focus{outline:2px solid var(--ink);outline-offset:-2px;background:#fff}
+  td.off{background:repeating-linear-gradient(45deg,#f5f5f1,#f5f5f1 4px,#ecebe5 4px,#ecebe5 8px)}
+  th.rn,td.rn{text-align:center;color:var(--sub);font-size:11px;padding:8px 6px;background:#fafaf7;font-variant-numeric:tabular-nums}
+  .table-wrap{overflow-x:auto}
   .note{background:#fff8e6;border:1px solid #e6d9a8;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:10px}
   .errors{background:#fbe9e5;border:1px solid #e0b0a5;border-radius:6px;padding:10px 14px;font-size:13px;color:#8a2a18;margin-bottom:14px}
   .errors li{margin-left:18px}
   .success{background:#e8f3ec;border:1px solid #b5d4c1;border-radius:6px;padding:14px 16px;margin-bottom:14px}
-  .success .fname{font-family:var(--mono);font-weight:700;color:var(--ok)}
-  .warn{background:#fff8e6;border:1px solid #e6d9a8;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:14px}
+  .success li{margin-left:18px}
+  .success a{font-family:var(--mono);font-weight:700;color:var(--ok)}
+  .warn{background:#fff8e6;border:1px solid #e6d9a8;border-radius:6px;padding:8px 14px;font-size:12.5px}
+  .warn li{margin-left:18px}
   .row-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .spinner{display:inline-block;width:16px;height:16px;border:2px solid #cbd5df;border-top-color:var(--ink);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-3px;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .tabs{display:flex;gap:6px;margin-bottom:12px}
-  .tab{padding:6px 14px;border-radius:6px 6px 0 0;border:1px solid var(--line);border-bottom:none;background:#eee;cursor:pointer;font-size:13px}
+  @media (prefers-reduced-motion:reduce){.spinner{animation:none}}
+  .tabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+  .tab{padding:6px 14px;border-radius:6px 6px 0 0;border:1px solid var(--line);border-bottom:none;background:#eee;cursor:pointer;font-size:13px;font-weight:400;color:#1c1c1c}
   .tab.active{background:var(--card);font-weight:700;color:var(--ink)}
   .filelist{font-size:13px}
-  .filelist .file{display:flex;gap:14px;padding:8px 4px;border-bottom:1px solid var(--line);align-items:center}
+  .filelist .file{display:flex;gap:14px;padding:8px 4px;border-bottom:1px solid var(--line);align-items:center;flex-wrap:wrap}
   .filelist .fn{font-family:var(--mono);flex:1}
   .badge{font-size:11px;padding:2px 8px;border-radius:10px;background:#e8f3ec;color:var(--ok);border:1px solid #b5d4c1}
-  .badge.ng{background:#fbe9e5;color:#8a2a18;border-color:#e0b0a5}
   .muted{color:var(--sub);font-size:12px}
-  td.stat{padding:6px 8px;font-size:11px;white-space:nowrap;background:#fafaf7}
-  .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 9px;border-radius:10px}
-  .pill.new{background:#e8f0f8;color:var(--ink);border:1px solid #b9cde0}
-  .pill.upd{background:#fdece2;color:#a04a10;border:1px solid #ecc39f}
-  .pill.same{background:#eee;color:var(--sub);border:1px solid var(--line)}
-  td input.changed{background:#fdece2}
-  .notif{font-size:13px}
-  .notif .n{padding:9px 4px;border-bottom:1px solid var(--line)}
-  .notif .n b{color:#a04a10}
-  .notif .diff{color:var(--sub);font-size:12px;margin-left:14px}
-  .filesum{font-size:13px;margin-bottom:10px}
-  .filesum li{margin-left:20px}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 10px;border-radius:10px}
+  .pill.main{background:#e8f0f8;color:var(--ink);border:1px solid #b9cde0}
+  .pill.proof{background:#fdece2;color:#a04a10;border:1px solid #ecc39f}
+  .filesum{font-size:13px;margin-bottom:14px}
+  .filesum > li{margin-left:20px;margin-bottom:4px}
+  .filesum ul{margin:2px 0 0 18px;color:#8a5a0b;font-size:12px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--sub);margin-bottom:14px}
+  .legend i{display:inline-block;width:14px;height:14px;border:1px solid var(--line);vertical-align:-2px;margin-right:5px}
+  .case{border:1px solid var(--line);border-radius:8px;margin-bottom:16px;overflow:hidden}
+  .case-head{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding:10px 14px;background:#f3f5f1;border-bottom:1px solid var(--line)}
+  .case-head .no{font-family:var(--mono);font-weight:700;color:var(--ink);font-size:14px}
+  .case-head .fn{font-family:var(--mono);font-size:12px;color:var(--sub)}
+  .case-head button{margin-left:auto}
+  .case .warn{margin:10px 14px 0}
+  .case .table-wrap{padding:10px 0 0}
   footer{max-width:1180px;margin:0 auto;padding:0 20px 30px;color:var(--sub);font-size:12px}
-  @media(max-width:700px){.steps{flex-direction:column}.step{border-right:none;border-bottom:1px solid var(--line)}}
+  @media(max-width:700px){.steps{flex-direction:column}.step{border-right:none;border-bottom:1px solid var(--line)}header{padding:14px 16px}}
 </style>
 </head>
 <body>
 <header>
-  <h1>発注書CSV変換</h1>
-  <span class="sub">AI読取 → 確認 → 印刷勘太郎向けCSV出力</span>
+  <h1>三映CSV → 勘太郎CSV 変換</h1>
+  <span class="sub">固定ルールで変換 → 確認 → 印刷勘太郎向けCSV-B出力（AI不使用）</span>
   <span class="right"><span id="whoami"></span><a href="/api/logout">ログアウト</a></span>
 </header>
 <main>
   <div class="steps">
-    <div class="step active" id="st1"><b>1. 発注書アップロード</b>複数まとめてAIが読み取ります</div>
+    <div class="step active" id="st1"><b>1. 三映CSVアップロード</b>複数まとめて変換できます</div>
     <div class="step" id="st2"><b>2. 内容の確認・修正</b>必ず目視で確認してから確定します</div>
-    <div class="step" id="st3"><b>3. CSV出力</b>保存・.done作成、SFTP送信(設定時)</div>
+    <div class="step" id="st3"><b>3. CSV-B出力</b>1案件1ファイル・.done作成、SFTP送信(設定時)</div>
   </div>
 
   <section class="card" id="uploadCard">
-    <h2>発注書のアップロード</h2>
+    <h2>三映CSV（CSV-A）のアップロード</h2>
     <label class="drop" id="drop">
-      <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp">
-      <div class="big">ここに発注書をドラッグ＆ドロップ（複数可）</div>
-      <div>またはクリックしてファイルを選択（PDF / PNG / JPEG）</div>
+      <input type="file" id="fileInput" multiple accept=".csv,text/csv">
+      <div class="big">ここに三映CSVをドラッグ＆ドロップ（複数可）</div>
+      <div>またはクリックしてファイルを選択（.csv ／ Shift_JIS・UTF-8 どちらも可）</div>
     </label>
     <p id="uploadStatus" style="display:none;margin-top:14px;font-size:13px;background:#f0f4f8;border:1px solid #c6d4e2;border-radius:6px;padding:10px 14px"></p>
   </section>
 
   <section class="card" id="reviewCard" style="display:none">
-    <h2>読取結果の確認・修正</h2>
-    <div class="filesum" id="fileSummary"></div>
-    <div class="errors" id="errBox" style="display:none"><b>入力エラーがあります。修正してください:</b><ul id="errList"></ul></div>
-    <div class="table-wrap"><table id="grid"><thead></thead><tbody></tbody></table></div>
+    <h2>変換結果の確認・修正</h2>
+    <ul class="filesum" id="fileSummary"></ul>
+    <div class="legend">
+      <span><i style="background:var(--perrow)"></i>青い見出し（N〜AB列、U列を除く）は2行目以降にも出力されます</span>
+      <span><i style="background:repeating-linear-gradient(45deg,#f5f5f1,#f5f5f1 4px,#ecebe5 4px,#ecebe5 8px)"></i>斜線のセルはCSV-Bでは空欄になります</span>
+    </div>
+    <div class="errors" id="errBox" style="display:none"><b>出力できませんでした。修正してください:</b><ul id="errList"></ul></div>
+    <div id="cases"></div>
     <div class="row-actions">
-      <button class="btn-ghost" onclick="addRow()">＋ 明細行を追加</button>
-      <button class="btn-primary" id="exportBtn" onclick="doExport()">確認しました — CSVを出力する</button>
+      <button class="btn-primary" id="exportBtn" onclick="doExport()">確認しました — CSV-Bを出力する</button>
       <span class="muted" id="exportNote"></span>
     </div>
   </section>
@@ -114,35 +131,32 @@
   <section class="card" id="doneCard" style="display:none">
     <h2>出力完了</h2>
     <div class="success">
-      CSVを保存しました: <span class="fname" id="outName"></span><br>
-      <span class="muted">.done ファイルを作成済み。</span>
+      <b id="doneTitle"></b>
+      <ul id="doneList" style="margin-top:6px"></ul>
+      <span class="muted">各ファイルに .done ファイルを作成済み。ファイル名をクリックすると内容を確認できます。</span>
     </div>
     <div id="sftpBox"></div>
     <div class="row-actions">
-      <a id="dlLink" href="#"><button class="btn-ghost">CSVをダウンロードして確認</button></a>
-      <button class="btn-primary" onclick="reset()">次の発注書を処理する</button>
+      <button class="btn-primary" onclick="reset()">次の三映CSVを変換する</button>
     </div>
-  </section>
-
-  <section class="card" id="notifCard" style="display:none">
-    <h2>発注書の更新通知</h2>
-    <div class="notif" id="notifList"></div>
   </section>
 
   <section class="card">
     <h2>連携フォルダの状況</h2>
-    <div class="tabs">
-      <div class="tab active" data-tab="incoming" onclick="switchTab(this)">未取込（incoming）</div>
-      <div class="tab" data-tab="archive" onclick="switchTab(this)">取込済（archive）</div>
-      <div class="tab" data-tab="failed" onclick="switchTab(this)">エラー（failed）</div>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="incoming" onclick="switchTab(this)">未取込（incoming）</button>
+      <button class="tab" data-tab="archive" onclick="switchTab(this)">取込済（archive）</button>
+      <button class="tab" data-tab="failed" onclick="switchTab(this)">エラー（failed）</button>
     </div>
     <div class="filelist" id="fileList"><span class="muted">読み込み中…</span></div>
   </section>
 </main>
-<footer>本アプリは AI の読取結果を人が確認・確定してから基幹システムへ連携する運用を前提としています。</footer>
+<footer>変換は固定ルールで行い（AI不使用）、人が確認・確定してから基幹システムへ連携する運用を前提としています。変換ルールは sanei_config.yaml で変更できます。</footer>
 
 <script>
-let COLUMNS = [], rows = [], checks = [], sourceFile = "", curTab = "incoming", SFTP_PUSH = false;
+let COLUMNS = [], CASES = [], curTab = "incoming", SFTP_PUSH = false;
+// 複数行の固定文が入る備考列。<input>だと改行が消えるため textarea にする
+const NOTE_KEYS = new Set(["delivery_note", "plate_note", "print_note", "bind_note"]);
 
 async function init(){
   const res = await fetch("/api/config");
@@ -153,44 +167,58 @@ async function init(){
   document.getElementById("exportNote").textContent = SFTP_PUSH
     ? "出力後、印刷勘太郎サーバーへSFTP送信します"
     : "出力先: 連携フォルダ（勘太郎がSFTPで取込）";
-  renderHead();
   loadFiles();
-  loadNotifs();
 }
-async function loadNotifs(){
-  try{
-    const res = await fetch("/api/notifications");
-    if(!res.ok) return;
-    const list = (await res.json()).notifications;
-    if(!list.length) return;
-    document.getElementById("notifCard").style.display="block";
-    document.getElementById("notifList").innerHTML = list.map(n=>
-      `<div class="n"><b>更新</b> ${esc(n.at)} ｜ 受注番号 ${esc(n.order_no)}（${esc(n.item_name)}）
-       <div class="diff">${n.changes.map(c=>esc(c.label)+": "+esc(c.old)+" → "+esc(c.new)).join("　／　")}</div></div>`
-    ).join("");
-  }catch(e){}
-}
-function renderHead(){
-  document.querySelector("#grid thead").innerHTML =
-    "<tr><th>状態</th><th>読取元</th>" + COLUMNS.map(c=>`<th>${c.label}${c.required?'<span class="req">＊</span>':''}</th>`).join("") + "<th></th></tr>";
-}
-function renderBody(){
-  document.querySelector("#grid tbody").innerHTML = rows.map((r,i)=>{
-    const chk = checks[i] || {status:"new", changes:[]};
-    const changedKeys = new Set(chk.changes.map(c=>c.key));
-    const pill = chk.status==="updated"
-        ? `<span class="pill upd" title="${esc(chk.changes.map(c=>c.label+": "+c.old+" → "+c.new).join("\n"))}">更新</span>`
-      : chk.status==="unchanged" ? '<span class="pill same">同一</span>'
-      : '<span class="pill new">新規</span>';
-    return `<tr><td class="stat">${pill}</td><td class="src" title="${esc(r._source||"手入力")}">${esc(r._source||"手入力")}</td>` +
-    COLUMNS.map(c=>
-      `<td data-k="${c.key}"><input class="${changedKeys.has(c.key)?"changed":""}" value="${esc(r[c.key]||"")}" oninput="rows[${i}]['${c.key}']=this.value"></td>`
-    ).join("") + `<td style="text-align:center"><button class="btn-ghost" style="padding:2px 10px" onclick="rows.splice(${i},1);checks.splice(${i},1);renderBody()">削除</button></td></tr>`;
-  }).join("");
-}
-function esc(s){return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;")}
-function addRow(){ rows.push({}); checks.push({status:"new",changes:[]}); renderBody(); }
+
+function esc(s){ return String(s ?? "").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function colLetter(i){ let s = ""; i += 1; while(i){ const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); } return s; }
 function setStep(n){ [1,2,3].forEach(i=>document.getElementById("st"+i).classList.toggle("active", i===n)); }
+
+function caseHtml(c){
+  const head = COLUMNS.map((col,i)=>
+    `<th${col.per_row ? ' class="pr"' : ''}><span class="colL">${colLetter(i)}</span>${esc(col.label)}</th>`).join("");
+  const body = c.rows.map((r,ri)=> "<tr><td class=\"rn\">" + (ri+1) + "</td>" + COLUMNS.map(col=>{
+    if(ri > 0 && !col.per_row) return '<td class="off"></td>';
+    const v = r[col.key] ?? "";
+    const a = `data-id="${c.id}" data-ri="${ri}" data-k="${col.key}" aria-label="${esc(col.label)}（${ri+1}行目）"`;
+    if(NOTE_KEYS.has(col.key) || String(v).includes("\n"))
+      return `<td><textarea ${a} rows="3">${esc(v)}</textarea></td>`;
+    return `<td><input ${a} value="${esc(v)}"></td>`;
+  }).join("") + "</tr>").join("");
+  const warn = c.warnings.length
+    ? `<div class="warn"><ul>${c.warnings.map(w=>`<li>${esc(w)}</li>`).join("")}</ul></div>` : "";
+  return `<div class="case">
+    <div class="case-head">
+      <span class="no">受注№ ${esc(c.order_no)}</span>
+      <span class="pill ${c.section === "校正" ? "proof" : "main"}">${esc(c.section)}</span>
+      <span class="fn">→ ${esc(c.filename)}</span>
+      <span class="muted">${c.rows.length}行 ｜ ${esc(c.file)}</span>
+      <button class="btn-ghost sm" onclick="removeCase('${c.id}')">この案件は出力しない</button>
+    </div>${warn}
+    <div class="table-wrap"><table><thead><tr><th class="rn">行</th>${head}</tr></thead><tbody>${body}</tbody></table></div>
+  </div>`;
+}
+
+function updateExportBtn(){
+  const btn = document.getElementById("exportBtn");
+  btn.disabled = !CASES.length;
+  btn.textContent = `確認しました — CSV-Bを出力する（${CASES.length}案件 → ${CASES.length}ファイル）`;
+}
+
+function renderCases(){
+  document.getElementById("cases").innerHTML = CASES.length
+    ? CASES.map(caseHtml).join("")
+    : '<p class="muted" style="margin-bottom:14px">出力対象の案件がありません。</p>';
+  updateExportBtn();
+}
+
+function removeCase(id){ CASES = CASES.filter(c=>c.id !== id); renderCases(); }
+
+// 画面で修正した値を CASES に反映(再描画しても修正は消えない)
+document.getElementById("cases").addEventListener("input", ev=>{
+  const t = ev.target, c = CASES.find(x=>x.id === t.dataset.id);
+  if(c) c.rows[+t.dataset.ri][t.dataset.k] = t.value;
+});
 
 const drop = document.getElementById("drop"), fi = document.getElementById("fileInput");
 ["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("over")}));
@@ -201,31 +229,25 @@ fi.addEventListener("change",()=>{ if(fi.files.length) upload([...fi.files]); })
 async function upload(files){
   const st = document.getElementById("uploadStatus");
   st.style.display = "block";
-  st.innerHTML = `<span class="spinner"></span>AIが発注書 ${files.length}件 を読み取っています…（1件あたり数十秒かかる場合があります）`;
+  st.innerHTML = `<span class="spinner"></span>三映CSV ${files.length}件 を変換しています…`;
   const fd = new FormData();
   files.forEach(f=>fd.append("files", f));
   try{
-    const res = await fetch("/api/extract",{method:"POST",body:fd});
+    const res = await fetch("/api/convert",{method:"POST",body:fd});
     if(res.status === 401){ location.href = "/login.html"; return; }
     const j = await res.json();
-    if(!res.ok) throw new Error(j.detail || "読み取りに失敗しました");
-    rows = j.orders; sourceFile = files.map(f=>f.name).join(", ");
-    checks = [];
-    try{
-      const cres = await fetch("/api/check",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rows})});
-      if(cres.ok) checks = (await cres.json()).results;
-    }catch(e){}
-    const updCount = checks.filter(c=>c.status==="updated").length;
-    const okCount = j.results.filter(r=>r.ok).length;
-    st.textContent = `読み取り完了: ${okCount}/${j.results.length}件成功（合計 ${rows.length}明細`
-      + (updCount ? `、うち ${updCount}明細は登録済み発注の更新` : "") + "）";
-    document.getElementById("fileSummary").innerHTML =
-      "<ul>" + j.results.map(r=>
-        `<li>${r.ok?"✔":"✖"} ${esc(r.file)} — ${r.ok? r.rows+"明細" : "読取失敗"}${r.note? "<span class='muted'>（"+esc(r.note)+"）</span>":""}</li>`
-      ).join("") + "</ul>";
-    document.getElementById("reviewCard").style.display="block";
-    document.getElementById("doneCard").style.display="none";
-    renderBody(); setStep(2);
+    if(!res.ok) throw new Error(j.detail || "変換に失敗しました");
+    CASES = j.cases;
+    const ok = j.results.filter(r=>r.ok).length;
+    st.textContent = `変換完了: ${ok}/${j.results.length}ファイル成功 → ${CASES.length}案件（CSV-B ${CASES.length}ファイル分）`;
+    document.getElementById("fileSummary").innerHTML = j.results.map(r=>
+      r.ok ? `<li>✔ ${esc(r.file)} — 下版予定日 ${esc(r.plate_date || "（取得できず）")} ／ ${r.cases}案件`
+             + (r.warnings.length ? `<ul>${r.warnings.map(w=>`<li>${esc(w)}</li>`).join("")}</ul>` : "") + "</li>"
+           : `<li>✖ ${esc(r.file)} — <span style="color:#8a2a18">${esc(r.note)}</span></li>`).join("");
+    document.getElementById("errBox").style.display = "none";
+    document.getElementById("reviewCard").style.display = "block";
+    document.getElementById("doneCard").style.display = "none";
+    renderCases(); setStep(2);
     document.getElementById("reviewCard").scrollIntoView({behavior:"smooth"});
   }catch(e){ st.textContent = "エラー: " + e.message; }
 }
@@ -235,52 +257,42 @@ async function doExport(){
   btn.disabled = true; btn.textContent = "出力中…";
   const errBox = document.getElementById("errBox");
   try{
-    const res = await fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({rows, source_file: sourceFile})});
+    const payload = {cases: CASES.map(c=>({order_no:c.order_no, section:c.section, plate_date:c.plate_date, rows:c.rows}))};
+    const res = await fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     if(res.status === 401){ location.href = "/login.html"; return; }
     const j = await res.json();
+    if(!res.ok) throw new Error(j.detail ? JSON.stringify(j.detail) : "出力に失敗しました");
     if(!j.ok){
-      errBox.style.display="block";
+      errBox.style.display = "block";
       document.getElementById("errList").innerHTML = j.errors.map(e=>`<li>${esc(e)}</li>`).join("");
+      errBox.scrollIntoView({behavior:"smooth"});
       return;
     }
-    errBox.style.display="none";
-    if(!j.filename){
-      errBox.style.display="none";
-      alert(j.message || "出力対象がありませんでした");
-      return;
-    }
-    document.getElementById("outName").textContent = j.filename
-      + `（新規${j.summary.new}・更新${j.summary.updated}` 
-      + (j.summary.unchanged? `・同一スキップ${j.summary.unchanged}`:"") + "）";
-    document.getElementById("dlLink").href = "/api/download/" + encodeURIComponent(j.filename);
-    const sb = document.getElementById("sftpBox");
-    let updHtml = "";
-    if(j.changed && j.changed.length){
-      updHtml = `<div class="warn"><b>発注書の更新を検出しました:</b><ul style="margin-left:18px">`
-        + j.changed.map(n=>`<li>受注番号 ${esc(n.order_no)}（${esc(n.item_name)}）: `
-            + n.changes.map(c=>`${esc(c.label)} ${esc(c.old)} → <b>${esc(c.new)}</b>`).join("、") + "</li>").join("")
-        + "</ul></div>";
-    }
-    sb.innerHTML = updHtml + (j.sftp
+    errBox.style.display = "none";
+    document.getElementById("doneTitle").textContent = `CSV-Bを ${j.files.length}ファイル 保存しました`;
+    document.getElementById("doneList").innerHTML = j.files.map(f=>
+      `<li><a href="/api/download/${encodeURIComponent(f.filename)}">${esc(f.filename)}</a>
+       <span class="muted">受注№${esc(f.order_no)} ・ ${esc(f.section)} ・ ${f.rows}行</span></li>`).join("");
+    document.getElementById("sftpBox").innerHTML = j.sftp
       ? (j.sftp.ok ? `<div class="success">SFTP送信: ${esc(j.sftp.message)}</div>`
-                   : `<div class="warn">SFTP送信: ${esc(j.sftp.message)}</div>`)
-      : "");
-    document.getElementById("doneCard").style.display="block";
-    loadNotifs();
+                   : `<div class="warn" style="margin-bottom:14px">SFTP送信: ${esc(j.sftp.message)}</div>`)
+      : "";
+    // 出力済みの案件をもう一度出力すると勘太郎に二重登録されるため、確認画面は閉じる
+    document.getElementById("reviewCard").style.display = "none";
+    document.getElementById("doneCard").style.display = "block";
     setStep(3); loadFiles();
     document.getElementById("doneCard").scrollIntoView({behavior:"smooth"});
   }catch(e){ alert("出力エラー: " + e.message); }
-  finally{ btn.disabled=false; btn.textContent="確認しました — CSVを出力する"; }
+  finally{ updateExportBtn(); }
 }
 
 function reset(){
-  rows=[]; checks=[]; sourceFile="";
-  document.getElementById("reviewCard").style.display="none";
-  document.getElementById("doneCard").style.display="none";
+  CASES = [];
+  document.getElementById("reviewCard").style.display = "none";
+  document.getElementById("doneCard").style.display = "none";
   const st = document.getElementById("uploadStatus");
-  st.textContent=""; st.style.display="none";
-  fi.value=""; setStep(1); window.scrollTo({top:0,behavior:"smooth"});
+  st.textContent = ""; st.style.display = "none";
+  fi.value = ""; setStep(1); window.scrollTo({top:0,behavior:"smooth"});
 }
 
 function switchTab(el){
@@ -294,8 +306,8 @@ async function loadFiles(){
   const list = j[curTab] || [];
   document.getElementById("fileList").innerHTML = list.length
     ? list.map(f=>`<div class="file"><span class="fn">${esc(f.name)}</span>
-        ${f.done?'<span class="badge">.done あり</span>':''}
-        <span class="muted">${f.size.toLocaleString()} B ｜ ${f.mtime}</span></div>`).join("")
+        ${f.done ? '<span class="badge">.done あり</span>' : ''}
+        <span class="muted">${f.size.toLocaleString()} B ｜ ${esc(f.mtime)}</span></div>`).join("")
     : '<span class="muted">ファイルはありません</span>';
 }
 init();

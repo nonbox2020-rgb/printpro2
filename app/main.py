@@ -1,23 +1,26 @@
-"""発注書 → 印刷勘太郎向けCSV変換 Webアプリ(FastAPI)。
+"""三映CSV → 印刷勘太郎向けCSV 変換 Webアプリ(FastAPI)。
 
 フロー:
   1. ログイン(全画面・API共通で認証必須)
-  2. 発注書(PDF/画像・複数可)をアップロード → Claude APIがデータ抽出
-  3. 画面で人が確認・修正(必須チェック・桁数チェック付き)
-  4. 確定 → 検証 → CSV生成 → アトミック書込 → .done 作成
+  2. 三映CSV(CSV-A・複数可)をアップロード → 固定ルールで勘太郎35列(A〜AI)に変換
+     (AIは使わない。ルールは sanei_config.yaml)
+  3. 画面で人が確認・修正(1案件=1ファイル単位。判断に迷う箇所は警告を表示)
+  4. 確定 → 案件ごとにCSV-B生成 → アトミック書込 → .done 作成
   5. 設定によりSFTPで印刷勘太郎サーバーへ自動送信(鍵認証/パスワード認証)
 
+設定ファイルの役割:
+  sanei_config.yaml ... 変換ルール・CSV-Bの35列定義・文字コード/囲み/改行・ファイル名
+  config.yaml       ... 出力フォルダ・.done・SFTP・サーバー
+
 必要な環境変数:
-  ANTHROPIC_API_KEY ... Claude APIキー
   APP_USERNAME / APP_PASSWORD ... ログインID/パスワード
   SECRET_KEY ... セッション署名用のランダム文字列
   SFTP_PASSWORD ... SFTPをパスワード認証で使う場合のみ
 """
-import json
 import logging
 import os
+import re
 import secrets
-import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -29,11 +32,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import csv_writer, extractor
-from app.store import OrderStore
+from app import csv_writer
+from app.sanei_converter import SaneiConverter
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG = yaml.safe_load((BASE_DIR / "config.yaml").read_text(encoding="utf-8"))
+SANEI = yaml.safe_load((BASE_DIR / "sanei_config.yaml").read_text(encoding="utf-8"))
+CONVERTER = SaneiConverter(SANEI)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,14 +47,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("kantaro-app")
 
-app = FastAPI(title="発注書CSV変換アプリ(印刷勘太郎連携)")
+app = FastAPI(title="三映CSV→勘太郎CSV 変換アプリ(印刷勘太郎連携)")
 
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-STORE = OrderStore(str(BASE_DIR / "data" / "orders.json"),
-                   str(BASE_DIR / "data" / "notifications.json"),
-                   key_field=CONFIG.get("update_check", {}).get("key_field", "order_no"))
+SECTIONS = ("本番", "校正")
 
 # ---------------- 認証 ----------------
 
@@ -106,142 +109,159 @@ def logout(request: Request):
 
 @app.get("/api/config")
 def get_config(request: Request):
-    """UIが列定義・運用設定を参照するためのAPI(SFTP秘密情報は返さない)。"""
+    """UIが35列の定義・運用設定を参照するためのAPI(SFTP秘密情報は返さない)。"""
     return {
-        "columns": CONFIG["csv"]["columns"],
+        "columns": SANEI["csv_b_columns"],
         "output": CONFIG["output"],
         "sftp_push": CONFIG["sftp"]["push_enabled"],
         "user": request.session.get("user", ""),
     }
 
 
-# ---------------- AI抽出(複数ファイル対応) ----------------
+# ---------------- 三映CSV → 案件ごとの35列に変換 ----------------
 
-@app.post("/api/extract")
-async def extract(files: list[UploadFile] = File(...)):
-    """複数の発注書をまとめてAI抽出。ファイルごとに成否を返し、明細は結合する。"""
-    orders, results = [], []
+def _decode_csv_a(raw: bytes) -> str:
+    """UTF-8を先に厳密に試し、失敗したら設定の文字コード(cp932)で読む。
+
+    cp932の日本語はUTF-8として解釈するとほぼ確実に失敗するため、この順番なら
+    どちらで保存されたファイルでも文字化けせずに判定できる。
+    """
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode(SANEI["input"].get("encoding", "cp932"))
+
+
+@app.post("/api/convert")
+async def convert(files: list[UploadFile] = File(...)):
+    """三映CSV(複数可)を変換し、案件(=CSV-B 1ファイル分)の一覧を返す。保存はしない。"""
+    cases, results = [], []
     for file in files:
-        ext = os.path.splitext(file.filename or "")[1].lower()
-        saved = UPLOAD_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}{ext}"
-        with open(saved, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-        log.info("アップロード受付: %s (元: %s)", saved.name, file.filename)
+        name = file.filename or "(名称なし)"
+        if os.path.splitext(name)[1].lower() != ".csv":
+            results.append({"file": name, "ok": False,
+                            "note": "CSVファイル(.csv)を選んでください"})
+            continue
+        raw = await file.read()
+        saved = UPLOAD_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}.csv"
+        saved.write_bytes(raw)  # 監査用に原本を保管
+        log.info("アップロード受付: %s (元: %s)", saved.name, name)
         try:
-            result = extractor.extract_from_file(
-                str(saved), CONFIG["csv"]["columns"],
-                CONFIG["extraction"]["model"], CONFIG["extraction"]["max_tokens"],
-            )
-            for row in result["orders"]:
-                row["_source"] = file.filename  # 読取元の表示用(CSVには出力しない)
-            orders.extend(result["orders"])
-            results.append({"file": file.filename, "ok": True,
-                            "rows": len(result["orders"]),
-                            "note": result.get("confidence_note", "")})
-            log.info("抽出成功: %s (%d明細)", file.filename, len(result["orders"]))
+            res = CONVERTER.convert(_decode_csv_a(raw))
         except Exception as e:
-            log.exception("AI抽出エラー: %s", file.filename)
-            results.append({"file": file.filename, "ok": False, "rows": 0, "note": str(e)})
-    return {"orders": orders, "results": results}
+            log.exception("変換エラー: %s", name)
+            results.append({"file": name, "ok": False, "note": f"読み取りに失敗しました: {e}"})
+            continue
+        for c in res["cases"]:
+            cases.append({
+                "id": uuid.uuid4().hex[:8],
+                "file": name,
+                "section": c["section"],
+                "order_no": c["order_no"],
+                "plate_date": res["plate_date"],
+                "filename": CONVERTER.filename_for(c, res["plate_date"]),
+                "rows": c["b_rows"],
+                "warnings": c["warnings"],
+            })
+        results.append({"file": name, "ok": True, "plate_date": res["plate_date"],
+                        "cases": len(res["cases"]), "warnings": res["warnings"]})
+        log.info("変換成功: %s (下版予定日 %s / %d案件)", name, res["plate_date"],
+                 len(res["cases"]))
+    return {"cases": cases, "results": results}
 
 
-# ---------------- 更新チェック・通知 ----------------
+# ---------------- CSV-B出力(1案件1ファイル) + SFTP送信 ----------------
 
-class CheckRequest(BaseModel):
+class CaseIn(BaseModel):
+    order_no: str
+    section: str = "本番"
+    plate_date: str = ""
     rows: list[dict]
 
-
-@app.post("/api/check")
-def check(req: CheckRequest):
-    """AI読取直後に呼び、各明細が 新規/更新/変更なし かと変更科目を返す。"""
-    rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in req.rows]
-    return {"results": STORE.check_rows(rows, CONFIG["csv"]["columns"])}
-
-
-@app.get("/api/notifications")
-def notifications():
-    """発注書の更新通知一覧(画面のお知らせ欄に表示)。"""
-    return {"notifications": STORE.notifications()}
-
-
-def _notify_slack(changed: list[dict], filename: str):
-    """SLACK_WEBHOOK_URL が設定されていればSlackにも通知(未設定なら何もしない)。"""
-    url = os.environ.get("SLACK_WEBHOOK_URL", "")
-    if not url or not changed:
-        return
-    try:
-        import urllib.request
-        lines = [f"【発注書の更新がありました】({filename})"]
-        for n in changed:
-            diffs = "、".join(f"{c['label']}: {c['old']} → {c['new']}" for c in n["changes"])
-            lines.append(f"・受注番号 {n['order_no']}({n['item_name']}): {diffs}")
-        body = json.dumps({"text": "\n".join(lines)}).encode()
-        req = urllib.request.Request(url, data=body,
-                                     headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=10)
-        log.info("Slack通知送信: %d件", len(changed))
-    except Exception:
-        log.exception("Slack通知に失敗(処理は継続)")
-
-
-# ---------------- CSV出力 + SFTP送信 ----------------
 
 class ExportRequest(BaseModel):
-    rows: list[dict]
-    source_file: str = ""
+    cases: list[CaseIn]
+
+
+_UNSAFE_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _safe_filename(name: str) -> str:
+    """画面から戻る値で組み立てるため、パス区切り等を無害化する(ディレクトリ外への書込防止)。"""
+    name = os.path.basename(_UNSAFE_CHARS.sub("_", name).replace("..", "_"))
+    return name if name.lower().endswith(".csv") else name + ".csv"
+
+
+def _unique_name(out_dir: str, name: str, used: set) -> str:
+    """同名が既にある場合は上書きせず _2, _3 … を付ける(未取込ファイルの消失防止)。"""
+    stem, ext = os.path.splitext(name)
+    candidate, n = name, 1
+    while candidate in used or os.path.exists(os.path.join(out_dir, candidate)):
+        n += 1
+        candidate = f"{stem}_{n}{ext}"
+    return candidate
 
 
 @app.post("/api/export")
 def export(req: ExportRequest):
-    """人の確認を経たデータを検証し、勘太郎仕様のCSVとして出力・送信する。"""
+    """人の確認を経た案件を、案件ごとにCSV-Bとして出力・送信する。
+
+    先に全案件のCSVを組み立てて検証し、1件でも失敗したら1ファイルも書き出さない。
+    """
+    if not req.cases:
+        return {"ok": False, "errors": ["出力する案件がありません"]}
     out_cfg = CONFIG["output"]
-    out_dir = str(BASE_DIR / out_cfg["dir"]) if not os.path.isabs(out_cfg["dir"]) else out_cfg["dir"]
-    rows_in = [{k: v for k, v in r.items() if not k.startswith("_")} for r in req.rows]
-    try:
-        rows = csv_writer.validate_rows(rows_in, CONFIG["csv"]["columns"], CONFIG["csv"]["encoding"])
-    except csv_writer.ValidationError as e:
-        return {"ok": False, "errors": e.errors}
+    out_dir = out_cfg["dir"] if os.path.isabs(out_cfg["dir"]) else str(BASE_DIR / out_cfg["dir"])
 
-    # 台帳と比較: 新規/更新/変更なし を判定し、台帳を更新
-    results = STORE.commit_rows(rows, CONFIG["csv"]["columns"], req.source_file)
-    statuses = [r["status"] for r in results]
-    skip_unchanged = CONFIG.get("update_check", {}).get("skip_unchanged", True)
-    if skip_unchanged:
-        rows_out = [row for row, r in zip(rows, results) if r["status"] != "unchanged"]
-    else:
-        rows_out = rows
-    if not rows_out:
-        return {"ok": True, "filename": None, "rows": 0,
-                "summary": {"new": 0, "updated": 0,
-                            "unchanged": statuses.count("unchanged")},
-                "message": "すべて登録済みの内容と同一のため、CSVは出力しませんでした"}
+    built, errors = [], []
+    for c in req.cases:
+        if not c.rows:
+            errors.append(f"受注№{c.order_no}: 明細がありません")
+            continue
+        section = c.section if c.section in SECTIONS else "本番"
+        rows = [{k: "" if v is None else str(v) for k, v in r.items()} for r in c.rows]
+        case = {"section": section, "order_no": c.order_no, "b_rows": rows}
+        try:
+            data = CONVERTER.build_csv_b(case)
+        except UnicodeEncodeError as e:
+            errors.append(f"受注№{c.order_no}: 出力の文字コードに変換できない文字があります"
+                          f"「{e.object[e.start:e.end]}」")
+            continue
+        plate_date = rows[0].get("plate_date") or c.plate_date
+        name = _safe_filename(CONVERTER.filename_for(case, plate_date))
+        built.append({"order_no": c.order_no, "section": section, "filename": name,
+                      "data": data, "rows": len(rows)})
+    if errors:
+        return {"ok": False, "errors": errors}
 
-    data = csv_writer.build_csv_bytes(rows_out, CONFIG["csv"])
-    filename = csv_writer.next_filename(out_dir, out_cfg["filename_pattern"], out_cfg["timestamp_format"])
-    paths = csv_writer.write_atomic(out_dir, filename, data,
-                                    out_cfg.get("done_file", True), out_cfg.get("done_suffix", ".done"))
-    log.info("CSV出力: %s (%d明細, 新規%d/更新%d/同一スキップ%d, 元:%s)",
-             paths["csv"], len(rows_out), statuses.count("new"),
-             statuses.count("updated"), statuses.count("unchanged"), req.source_file)
-
-    # 更新があった明細をSlack通知(SLACK_WEBHOOK_URL 設定時のみ)
-    changed = [{"order_no": row.get("order_no", ""),
-                "item_name": row.get("item_name", ""), "changes": r["changes"]}
-               for row, r in zip(rows, results) if r["status"] == "updated"]
-    _notify_slack(changed, filename)
+    written, used = [], set()
+    for b in built:
+        b["filename"] = _unique_name(out_dir, b["filename"], used)
+        used.add(b["filename"])
+        b["paths"] = csv_writer.write_atomic(out_dir, b["filename"], b["data"],
+                                             out_cfg.get("done_file", True),
+                                             out_cfg.get("done_suffix", ".done"))
+        written.append(b)
+        log.info("CSV-B出力: %s (受注№%s %s / %d行)", b["paths"]["csv"], b["order_no"],
+                 b["section"], b["rows"])
 
     sftp_result = None
     if CONFIG["sftp"]["push_enabled"]:
-        try:
-            _sftp_push(paths)
-            sftp_result = {"ok": True, "message": "印刷勘太郎サーバーへ送信しました"}
-        except Exception as e:
-            log.exception("SFTP送信エラー: %s", filename)
-            sftp_result = {"ok": False, "message": f"SFTP送信に失敗しました: {e}(CSVはサーバー内に保存済み)"}
-    return {"ok": True, "filename": filename, "rows": len(rows_out), "sftp": sftp_result,
-            "summary": {"new": statuses.count("new"), "updated": statuses.count("updated"),
-                        "unchanged": statuses.count("unchanged")},
-            "changed": changed}
+        failed = []
+        for b in written:
+            try:
+                _sftp_push(b["paths"])
+            except Exception as e:
+                log.exception("SFTP送信エラー: %s", b["filename"])
+                failed.append(f"{b['filename']}: {e}")
+        sftp_result = ({"ok": True, "message": f"印刷勘太郎サーバーへ{len(written)}件送信しました"}
+                       if not failed else
+                       {"ok": False, "message": "SFTP送信に失敗したファイルがあります"
+                        "(CSVはサーバー内に保存済み): " + " / ".join(failed)})
+    return {"ok": True,
+            "files": [{k: b[k] for k in ("order_no", "section", "filename", "rows")}
+                      for b in written],
+            "sftp": sftp_result}
 
 
 def _sftp_push(paths: dict):
@@ -286,7 +306,7 @@ def list_files():
         d = BASE_DIR / CONFIG["output"][key]
         files = []
         if d.exists():
-            for p in sorted(d.glob("*.csv"), reverse=True)[:50]:
+            for p in sorted(d.glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)[:50]:
                 st = p.stat()
                 files.append({"name": p.name, "size": st.st_size,
                               "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y/%m/%d %H:%M:%S"),
