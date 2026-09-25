@@ -294,10 +294,12 @@ class SaneiConverter:
                 line = [fix(brow.get(col["key"], "")) if col.get("per_row") else ""
                         for col in cols]
             w.writerow(line)
-        data = buf.getvalue()
-        if out.get("bom") and out.get("encoding", "utf-8").startswith("utf-8"):
-            return b"\xef\xbb\xbf" + data.encode(out["encoding"])
-        return data.encode(out.get("encoding", "utf-8"))
+        enc = out.get("encoding", "utf-8")
+        body = buf.getvalue().encode(enc)
+        # BOM: 日本語版Excelが UTF-8 と判定するための目印。utf-8-sig は自前で付けるので二重にしない
+        if out.get("bom") and enc.lower().startswith("utf") and not body.startswith(b"\xef\xbb\xbf"):
+            body = b"\xef\xbb\xbf" + body
+        return body
 
     def filename_for(self, case: dict, plate_date: str) -> str:
         pat = self.cfg["output"]["filename_pattern"]

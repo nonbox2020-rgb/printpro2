@@ -42,8 +42,12 @@ skip_side_value: "裏"      # F列がこの値の行は読み込まない
 # ただし「改行が文字化けした(先方で修正済)」とのこと。備考(AF/AG/AH)の
 # セル内改行が原因とみられるため cell_newline で扱いを切り替えられるようにする。
 output:
-  encoding: utf-8          # 見本はUTF-8(BOMなし)。取込OK確認済
-  bom: false
+  encoding: utf-8          # 見本はUTF-8(BOMなし)で勘太郎への取込OK確認済
+  # BOM付きにする。BOMが無いと日本語版Excelはダブルクリックで開いたときに
+  # Shift_JISとして読み、文字化けする(備考のセル内改行も崩れて行があふれる)。
+  # 勘太郎の取込はBOMなしで確認済みのため、BOM付きで一度取込テストすること。
+  # もし勘太郎が受け付けなければ false に戻す(Excelでは「データ→テキストまたはCSVから」で開く)。
+  bom: true
   quoting: minimal         # 改行/カンマを含むセルのみ " で囲む(見本準拠)
   newline: "\r\n"          # レコード区切り(CRLF)
   # セル内改行の扱い: crlf(全体をCRLFに統一) / keep(LFのまま=見本) /
