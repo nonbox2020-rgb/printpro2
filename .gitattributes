@@ -2,3 +2,5 @@
 tests/samples/** -text
 tests/expected/** -text
 tools/kantaro_agent.ps1 -text
+tools/kantaro_agent_installer.ps1 -text
+tools/setup_kantaro_agent.bat -text

@@ -84,7 +84,24 @@ Geminiに頼んだ修正で変換結果が変わってしまったら、ここ�
 
 勘太郎の指定フォルダは、変換する人とは別のパソコンにあります。そのパソコンで `tools/kantaro_agent.ps1`（Windows 標準の PowerShell で動く小さなプログラム。インストール不要）を数分おきに動かすと、出力されたCSVを受け取り、指定フォルダへ入れます。受け取ったCSVは画面の「取込済」に移り、画面には受け取り係の最終確認時刻が出ます。
 
-最初に1回だけ設定します:
+最初に1回だけ設定します（かんたん設定・約10分）。先に、変換アプリが受け取り係に対応した版で動いていること（このブランチが main に入り、Render に反映済み）を確かめてください。
+
+1. 勘太郎のパソコンの同じフォルダ（例: デスクトップに作った「受け取り係」）に、`tools/` の3つのファイルを入れる: `setup_kantaro_agent.bat`・`kantaro_agent_installer.ps1`・`kantaro_agent.ps1`
+2. `setup_kantaro_agent.bat`（歯車のアイコン）をダブルクリック →「このアプリがデバイスに変更を加えることを許可しますか？」で「はい」
+3. 聞かれる3つに答える
+   - ① 変換アプリのURL（ブラウザで開くときのアドレスを貼り付け）
+   - ② 合言葉 `AGENT_TOKEN`（Render に設定した値を貼り付け。まだ無ければ何も入れずに Enter → 新しい合言葉が作られてコピーされるので、Render の Environment に `AGENT_TOKEN` として貼り付けて保存）
+   - ③ 指定フォルダ（開いた窓で選ぶ）
+4. 「つながりました」→（未取込があれば一覧を見て Y）→「設定が終わりました」と出れば完了
+
+かんたん設定は `C:\kantaro-agent\` に受け取り係・設定（`kantaro_agent.config.json`）・記録（`kantaro_agent.log`）を置き、タスクスケジューラに `kantaro-agent` を登録します（起動時と5分おき。SYSTEM として動くので、画面は出ず、だれもログオンしていなくても動く）。登録のあと1回動かして、うまくいったか確かめます。
+
+- 設定を変える: もう一度 `setup_kantaro_agent.bat` を実行する（変えない項目は Enter。受け取り済みの控えは残るので二重に届かない）
+- やめる: タスクスケジューラで `kantaro-agent` を削除し、`C:\kantaro-agent\` を削除する
+- 指定フォルダがネットワーク上（`\\サーバー名\共有名` や割り当てたドライブ）のときは、かんたん設定は使えない（SYSTEM はネットワークのフォルダに入れない）。下の「手で設定する」で、そのフォルダに入れるユーザーとして登録する
+
+<details>
+<summary>手で設定する（かんたん設定を使わない場合）</summary>
 
 1. Render の Environment に `AGENT_TOKEN`（長いランダムな文字列）を追加する
 2. 勘太郎のパソコンに `C:\kantaro-agent\` を作り、`kantaro_agent.ps1` を置く（UTF-8 BOM付きのまま。メモ帳で上書き保存しない）
@@ -94,6 +111,9 @@ Geminiに頼んだ修正で変換結果が変わってしまったら、ここ�
    - 全般: 「ユーザーがログオンしているかどうかにかかわらず実行する」
    - トリガー: 「スタートアップ時」、詳細設定で「繰り返し間隔 5分間」「継続時間 無期限」（1分間にしたい場合は直接入力）
    - 操作: プログラム `powershell.exe`、引数 `-NoProfile -ExecutionPolicy Bypass -File C:\kantaro-agent\kantaro_agent.ps1`
+
+かんたん設定と手で設定したタスクを両方残さないこと（同じフォルダを2つのタスクが使うと、控えの書き込みがぶつかる）。
+</details>
 
 安全のしくみ:
 
@@ -119,7 +139,9 @@ printpro2/
 ├── tools/
 │   ├── run_sanei_demo.py                # 変換のデモ実行
 │   ├── kantaro_agent.ps1                # 勘太郎パソコンの受け取り係（Windows PowerShell）
-│   └── kantaro_agent.config.sample.json # 受け取り係の設定の見本
+│   ├── setup_kantaro_agent.bat          # 受け取り係のかんたん設定（ダブルクリック）
+│   ├── kantaro_agent_installer.ps1      # かんたん設定の本体（URL・合言葉・フォルダを聞いて登録）
+│   └── kantaro_agent.config.sample.json # 受け取り係の設定の見本（手で設定する場合）
 ├── tests/
 │   ├── test_sanei_converter.py  # 合成データでの単体テスト
 │   ├── test_samples.py          # 架空サンプルA〜Dを変換し、正解CSVと比較
