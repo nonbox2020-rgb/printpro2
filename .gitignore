@@ -16,3 +16,8 @@ app.log
 # OS
 .DS_Store
 Thumbs.db
+
+# 受け取り係の設定(合言葉を含む)とログ
+tools/kantaro_agent.config.json
+tools/kantaro_agent.log
+tools/kantaro_agent.delivered.txt

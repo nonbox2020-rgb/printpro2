@@ -101,7 +101,7 @@
   <div class="steps">
     <div class="step active" id="st1"><b>1. 三映CSVアップロード</b>複数まとめて変換できます</div>
     <div class="step" id="st2"><b>2. 内容の確認・修正</b>必ず目視で確認してから確定します</div>
-    <div class="step" id="st3"><b>3. CSV-B出力</b>1案件1ファイル。ダウンロードして勘太郎の指定フォルダへ</div>
+    <div class="step" id="st3"><b>3. CSV-B出力</b>1案件1ファイル。勘太郎のパソコンへ届ける</div>
   </div>
 
   <section class="card" id="uploadCard">
@@ -134,7 +134,7 @@
     <div class="success">
       <b id="doneTitle"></b>
       <ul id="doneList" style="margin-top:6px"></ul>
-      <span class="muted">「まとめてダウンロード」で全ファイルを保存し、勘太郎の指定フォルダに入れてください。ブラウザの保存先を指定フォルダにしておくと、そのまま入ります（初回だけ「複数ファイルのダウンロード」の許可を求められます）。ファイル名をクリックすると1件ずつ保存できます。</span>
+      <span class="muted" id="doneNote"></span>
     </div>
     <div id="sftpBox"></div>
     <div class="row-actions">
@@ -145,6 +145,7 @@
 
   <section class="card">
     <h2>連携フォルダの状況</h2>
+    <p class="muted" id="agentStatus" style="display:none;margin:-4px 0 10px"></p>
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="incoming" onclick="switchTab(this)">未取込（incoming）</button>
       <button class="tab" data-tab="archive" onclick="switchTab(this)">取込済（archive）</button>
@@ -156,7 +157,7 @@
 <footer>変換は固定ルールで行い（AI不使用）、人が確認・確定してから基幹システムへ連携する運用を前提としています。変換ルールは sanei_config.yaml で変更できます。</footer>
 
 <script>
-let COLUMNS = [], CASES = [], DONE_FILES = [], curTab = "incoming", SFTP_PUSH = false;
+let COLUMNS = [], CASES = [], DONE_FILES = [], curTab = "incoming", SFTP_PUSH = false, AGENT = false;
 // 複数行の固定文が入る備考列。<input>だと改行が消えるため textarea にする
 const NOTE_KEYS = new Set(["delivery_note", "plate_note", "print_note", "bind_note"]);
 
@@ -164,12 +165,14 @@ async function init(){
   const res = await fetch("/api/config");
   if(res.status === 401){ location.href = "/login.html"; return; }
   const cfg = await res.json();
-  COLUMNS = cfg.columns; SFTP_PUSH = cfg.sftp_push;
+  COLUMNS = cfg.columns; SFTP_PUSH = cfg.sftp_push; AGENT = cfg.agent;
   document.getElementById("whoami").textContent = cfg.user ? cfg.user + " さん" : "";
-  document.getElementById("exportNote").textContent = SFTP_PUSH
-    ? "出力後、印刷勘太郎サーバーへSFTP送信します"
+  document.getElementById("exportNote").textContent = AGENT
+    ? "出力後、勘太郎のパソコンが数分以内に自動的に受け取ります"
+    : SFTP_PUSH ? "出力後、印刷勘太郎サーバーへSFTP送信します"
     : "出力後、ダウンロードして勘太郎の指定フォルダへ入れます";
   loadFiles();
+  setInterval(loadFiles, 30000);  // 受け取られて「取込済」に移る様子が分かるよう、30秒ごとに更新
 }
 
 function esc(s){ return String(s ?? "").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
@@ -273,6 +276,9 @@ async function doExport(){
     errBox.style.display = "none";
     DONE_FILES = j.files;
     document.getElementById("dlAllBtn").textContent = `まとめてダウンロード（${j.files.length}ファイル）`;
+    document.getElementById("doneNote").textContent = AGENT
+      ? "勘太郎のパソコンが数分以内に自動的に受け取り、指定フォルダへ入れます。下の「連携フォルダの状況」で「取込済」に移れば届いています。手で入れる場合は「まとめてダウンロード」を使います。"
+      : "「まとめてダウンロード」で全ファイルを保存し、勘太郎の指定フォルダに入れてください。ブラウザの保存先を指定フォルダにしておくと、そのまま入ります（初回だけ「複数ファイルのダウンロード」の許可を求められます）。ファイル名をクリックすると1件ずつ保存できます。";
     document.getElementById("doneTitle").textContent = `CSV-Bを ${j.files.length}ファイル 保存しました`;
     document.getElementById("doneList").innerHTML = j.files.map(f=>
       `<li><a href="/api/download/${encodeURIComponent(f.filename)}">${esc(f.filename)}</a>
@@ -317,6 +323,11 @@ async function loadFiles(){
   const res = await fetch("/api/files");
   if(res.status === 401){ location.href = "/login.html"; return; }
   const j = await res.json();
+  const ag = document.getElementById("agentStatus");
+  ag.style.display = j.agent && j.agent.enabled ? "block" : "none";
+  ag.textContent = j.agent && j.agent.last_seen
+    ? `勘太郎パソコンの受け取り係：最終確認 ${j.agent.last_seen}`
+    : "勘太郎パソコンの受け取り係：まだ来ていません（勘太郎のパソコンの電源と受け取り係を確認してください）";
   const list = j[curTab] || [];
   document.getElementById("fileList").innerHTML = list.length
     ? list.map(f=>`<div class="file"><span class="fn">${curTab === "incoming"

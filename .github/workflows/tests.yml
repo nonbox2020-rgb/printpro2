@@ -15,8 +15,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: 部品をそろえる
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt httpx
       - name: 変換の単体テスト
         run: python tests/test_sanei_converter.py
       - name: 架空サンプルA〜Dを正解と比較
         run: python tests/test_samples.py
+      - name: 勘太郎パソコンの受け取り係のAPI
+        run: python tests/test_agent_api.py
