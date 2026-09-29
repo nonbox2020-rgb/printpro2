@@ -18,13 +18,17 @@ import io
 import re
 import unicodedata
 
+import jpholiday
+
 
 class SaneiConverter:
     def __init__(self, config: dict):
         self.cfg = config
         self.cols = config["input"]["columns"]
-        self._holidays = set(config["delivery"].get("holidays_2026", [])) | \
-            set(config["delivery"].get("company_closed", []))
+        # 国民の祝日は jpholiday が毎年自動で判定する(年ごとの一覧の手入力は不要)。
+        # 会社の休業日(お盆・年末年始など)だけを設定に書く。
+        self._closed = {self._closed_day(v)
+                        for v in config["delivery"].get("company_closed") or []}
 
     # ---------------- CSV-A の解釈 ----------------
 
@@ -386,14 +390,30 @@ class SaneiConverter:
             return ""
         return f"{m.group(1)}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
 
+    @staticmethod
+    def _closed_day(v) -> "_dt.date":
+        """company_closed の1件(2026/12/31・2026-12-31 どちらの書き方でも可)を日付にする。
+
+        書き間違いは黙って無視せず、起動時にエラーにして気づけるようにする。
+        """
+        if isinstance(v, _dt.datetime):
+            return v.date()
+        if isinstance(v, _dt.date):
+            return v
+        m = re.fullmatch(r"\s*(\d{4})[/-](\d{1,2})[/-](\d{1,2})\s*", str(v))
+        try:
+            return _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except (AttributeError, ValueError):
+            raise ValueError(f"sanei_config.yaml の company_closed に日付として読めない値があります: {v!r}"
+                             "(例: 2026/12/31)") from None
+
     def _add_business_days(self, base: "_dt.date", n: int) -> "_dt.date":
+        """土日・国民の祝日・会社の休業日を数えずに n 営業日進める。"""
         d = base
         added = 0
         while added < n:
             d = d + _dt.timedelta(days=1)
-            if d.weekday() >= 5:  # 土(5)日(6)
-                continue
-            if d.strftime("%Y/%m/%d") in self._holidays:
+            if d.weekday() >= 5 or jpholiday.is_holiday(d) or d in self._closed:
                 continue
             added += 1
         return d
