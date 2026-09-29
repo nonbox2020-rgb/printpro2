@@ -1,66 +1,27 @@
 # =============================================================
-# 発注書CSV変換アプリ 設定ファイル
-# 「印刷勘太郎から求むものリスト」の協議結果をここに反映する。
-# コードを変更せず、このファイルの修正だけで仕様変更に対応できる。
+# 三映CSV→勘太郎CSV変換アプリ 運用設定
+# 変換ルール・35列の定義・CSV-Bの形式は sanei_config.yaml にある。
+# このファイルは出力フォルダ・SFTP・サーバーの設定だけ。
 # =============================================================
 
-# ※ 現在の画面(三映CSV→勘太郎CSV)の変換ルール・35列の定義・CSV-Bの形式は
-#   sanei_config.yaml にある。このファイルで使っているのは output / sftp / server のみ。
-#   以下の csv・mode・extraction・update_check は旧フロー(発注書PDFのAI読取)用で、現在は未使用。
-
-# --- 2. CSVフォーマット仕様(旧フロー用・現在未使用) ---
-csv:
-  encoding: cp932          # 文字コード: cp932(Shift_JIS) / utf-8 / utf-8-sig
-  newline: "\r\n"          # 改行コード: "\r\n"(CRLF) / "\n"(LF)
-  header: true             # 1行目にヘッダー行を出すか
-  quoting: all             # 囲み文字: all(全て"で囲む) / minimal(必要時のみ) / none
-  # 列定義: 勘太郎の取込仕様に合わせて並び順・桁数・必須を定義
-  columns:
-    - { key: order_no,      label: 受注番号,   required: true,  max_len: 20 }
-    - { key: order_date,    label: 受注日,     required: true,  max_len: 10, format: date }   # YYYY/MM/DD
-    - { key: customer_code, label: 得意先コード, required: false, max_len: 10 }
-    - { key: customer_name, label: 得意先名,   required: true,  max_len: 60 }
-    - { key: item_name,     label: 品名,       required: true,  max_len: 100 }
-    - { key: spec,          label: 仕様,       required: false, max_len: 200 }
-    - { key: quantity,      label: 数量,       required: true,  max_len: 10, format: int }
-    - { key: unit_price,    label: 単価,       required: false, max_len: 12, format: number }
-    - { key: amount,        label: 金額,       required: false, max_len: 14, format: number }
-    - { key: delivery_date, label: 納期,       required: false, max_len: 10, format: date }
-    - { key: note,          label: 備考,       required: false, max_len: 200 }
-
-# --- 3. 運用ルール(勘太郎と要確認) ---
+# --- 出力先 ---
 output:
-  dir: ./data/incoming            # 勘太郎がSFTPで見に来る配置先ディレクトリ
-  filename_pattern: "order_{timestamp}_{seq:03d}.csv"  # 命名規則(秒単位タイムスタンプ+連番で重複防止)
-  timestamp_format: "%Y%m%d_%H%M%S"
-  done_file: true                 # .doneトリガーファイルを出すか(転送完了の合図)
+  dir: ./data/incoming            # 出力したCSV-Bの置き場所。画面からダウンロードして勘太郎の指定フォルダへ入れる
+                                  # (アプリを勘太郎のパソコンで動かす場合は、指定フォルダのパスを書けば直接入る)
+  done_file: true                 # .done ファイル(書き終わりの合図)も作るか
   done_suffix: ".done"
-  atomic_write: true              # 一時ファイル(.tmp)に書いてからrename(不完全CSVの読込防止)
-  archive_dir: ./data/archive     # 勘太郎取込後に移動するフォルダ(処理済み)
-  failed_dir: ./data/failed       # エラー時の退避先
+  archive_dir: ./data/archive     # 取込済のCSVを移すフォルダ(画面の「取込済」タブ)
+  failed_dir: ./data/failed       # エラー時の退避先(画面の「エラー」タブ)
 
-# --- 発生頻度: batch(溜めて一括) / realtime(確定の都度) ---
-mode: realtime
-
-# --- AI読取設定 ---
-extraction:
-  model: claude-sonnet-4-6
-  max_tokens: 4000
-
-# --- 1. SFTP接続情報(勘太郎側がPULLする構成が基本。PUSHする場合のみ使用) ---
+# --- SFTP送信(今は使わない。勘太郎はパソコンの指定フォルダから取り込む) ---
 sftp:
   push_enabled: false             # true にするとアプリ側からSFTPで送信(paramiko)
   host: ""
   port: 22
   username: ""
-  private_key_path: ""            # SSH鍵認証(パスワードは使わない)
+  private_key_path: ""            # SSH鍵認証(鍵ファイルのパス)
   remote_dir: "/incoming/orders/"
 
 server:
   host: 0.0.0.0
   port: 8000
-
-# --- 発注書の更新(差し替え)検出 ---
-update_check:
-  key_field: order_no      # 同一発注と判定するキー(受注番号)
-  skip_unchanged: true     # 内容が前回と完全に同じ明細はCSVに出力しない(二重登録防止)
