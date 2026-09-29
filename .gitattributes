@@ -1,0 +1,3 @@
+# テスト用CSVは1バイトずつ比べるため、改行コードなどを自動変換しない
+tests/samples/** -text
+tests/expected/** -text

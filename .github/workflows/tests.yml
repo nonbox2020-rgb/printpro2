@@ -1,0 +1,22 @@
+# GitHubに納める(プッシュする)たびに、変換のテストを自動で実行する。
+# 赤(失敗)になったら、直前の変更で変換結果が変わっている。README の「自動テスト」を参照。
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 部品をそろえる
+        run: pip install -r requirements.txt
+      - name: 変換の単体テスト
+        run: python tests/test_sanei_converter.py
+      - name: 架空サンプルA〜Dを正解と比較
+        run: python tests/test_samples.py
