@@ -179,11 +179,15 @@ const SaneiConverter = (function () {
     return name;
   }
 
-  // 寸法 → [用紙サイズ, 印刷サイズ]。表にあれば表、無ければ規則で推定して警告
+  // 寸法 → [用紙サイズ, 印刷サイズ]。表にあれば表。無ければ size_unknown に従う（blank = 空白 / estimate = 推定）して警告
   function convertSize(dim, warns, R) {
     if (!dim) return ['', ''];
     const table = R.size_table;
     if (Object.prototype.hasOwnProperty.call(table, dim)) return [table[dim].paper, table[dim].print];
+    if ((R.size_unknown || 'estimate') === 'blank') {
+      warns.push('[寸法なし] 「' + dim + '」は変換表に無いため、用紙サイズ・印刷サイズは空白(勘太郎で入力してください)');
+      return ['', ''];
+    }
     let prefix = dim;
     const sufs = ['全判', '半裁', '全', '半', '判', '裁'];
     for (let i = 0; i < sufs.length; i++) {
@@ -347,15 +351,23 @@ const SaneiConverter = (function () {
     return m[1] + '/' + pad2(toInt(m[2])) + '/' + pad2(toInt(m[3]));
   }
 
-  // 土日・国民の祝日・会社の休業日を数えずに n 営業日進める
+  // 休みの日を数えずに n 営業日進める。日曜・国民の祝日・会社の休業日は休み。
+  // 土曜は working_saturdays の「第N土曜日」（例 [2, 4, 5]）だけ営業日
   function addBusinessDays(base, n, R) {
     const closed = {};
     (R.delivery.company_closed || []).forEach(function (v) { closed[fmt(closedDay(v))] = true; });
+    const saturdays = R.delivery.working_saturdays || [];
+    saturdays.forEach(function (v) {
+      if (!(v === Math.floor(v) && v >= 1 && v <= 5)) {
+        throw new Error('2_rules.gs の working_saturdays は 1〜5 の数字で書いてください（例: [2, 4, 5]）: ' + v);
+      }
+    });
     let d = base, added = 0;
     while (added < n) {
       d = addDays(d, 1);
       const dow = d.getUTCDay();
-      if (dow === 0 || dow === 6 || isJapaneseHoliday(d) || closed[fmt(d)]) continue;
+      if (dow === 0 || isJapaneseHoliday(d) || closed[fmt(d)]) continue;
+      if (dow === 6 && saturdays.indexOf(Math.floor((d.getUTCDate() - 1) / 7) + 1) < 0) continue;
       added++;
     }
     return d;

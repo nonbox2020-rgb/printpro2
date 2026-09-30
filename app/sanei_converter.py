@@ -29,6 +29,12 @@ class SaneiConverter:
         # 会社の休業日(お盆・年末年始など)だけを設定に書く。
         self._closed = {self._closed_day(v)
                         for v in config["delivery"].get("company_closed") or []}
+        # 営業日にする「第N土曜日」(例 [2, 4, 5] = 第2・4・5土曜日は営業日、第1・3土曜日は休み)
+        saturdays = config["delivery"].get("working_saturdays") or []
+        if not all(isinstance(n, int) and 1 <= n <= 5 for n in saturdays):
+            raise ValueError("sanei_config.yaml の working_saturdays は 1〜5 の数字で書いてください"
+                             f"(例: [2, 4, 5]): {saturdays!r}")
+        self._working_saturdays = set(saturdays)
 
     # ---------------- CSV-A の解釈 ----------------
 
@@ -229,12 +235,17 @@ class SaneiConverter:
         return name
 
     def _convert_size(self, dim: str, warns: list) -> tuple:
-        """寸法(G) → (用紙サイズ, 印刷サイズ)。表優先、無ければ規則で推定。"""
+        """寸法(G) → (用紙サイズ, 印刷サイズ)。表にあれば表。無ければ size_unknown に従う
+        (blank = 空白にして知らせる / estimate = 規則で推定して知らせる)。"""
         if not dim:
             return "", ""
         table = self.cfg["size_table"]
         if dim in table:
             return table[dim]["paper"], table[dim]["print"]
+        if self.cfg.get("size_unknown", "estimate") == "blank":
+            warns.append(f"[寸法なし] 「{dim}」は変換表に無いため、用紙サイズ・印刷サイズは空白"
+                         f"(勘太郎で入力してください)")
+            return "", ""
         # 規則推定: プレフィックスを取り出し、全判/半裁の別で組み立てる
         prefix = dim
         for suf in ("全判", "半裁", "全", "半", "判", "裁"):
@@ -407,13 +418,20 @@ class SaneiConverter:
             raise ValueError(f"sanei_config.yaml の company_closed に日付として読めない値があります: {v!r}"
                              "(例: 2026/12/31)") from None
 
+    def _is_business_day(self, d: "_dt.date") -> bool:
+        """日曜・国民の祝日・会社の休業日は休み。土曜は working_saturdays の「第N土曜日」だけ営業日。"""
+        if d.weekday() == 6 or jpholiday.is_holiday(d) or d in self._closed:
+            return False
+        if d.weekday() == 5:
+            return (d.day - 1) // 7 + 1 in self._working_saturdays
+        return True
+
     def _add_business_days(self, base: "_dt.date", n: int) -> "_dt.date":
-        """土日・国民の祝日・会社の休業日を数えずに n 営業日進める。"""
+        """休みの日を数えずに n 営業日進める。"""
         d = base
         added = 0
         while added < n:
             d = d + _dt.timedelta(days=1)
-            if d.weekday() >= 5 or jpholiday.is_holiday(d) or d in self._closed:
-                continue
-            added += 1
+            if self._is_business_day(d):
+                added += 1
         return d

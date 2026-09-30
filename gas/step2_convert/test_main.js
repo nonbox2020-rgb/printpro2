@@ -203,8 +203,8 @@ mails = run();
 const dName = expectedNames("sample_D_unknown_size")[0];
 const dFile = () => files.filter((x) => x.parent === folderAt(P, "2_勘太郎用") && x.getName().startsWith(dName.slice(0, -4)));
 check(dFile().length === 1 && dFile()[0].blob.bytes.equals(fs.readFileSync(path.join(EXPECTED, "sample_D_unknown_size", dName))),
-  "警告のある案件も 2_勘太郎用 へ（推定の値のまま。正解と同じ）");
-check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 1件・確認 1件" && /寸法推定/.test(mails[0].body) &&
+  "警告のある案件も 2_勘太郎用 へ（表に無い寸法は空白のまま。正解と同じ）");
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 1件・確認 1件" && /寸法なし/.test(mails[0].body) &&
   /勘太郎に入ったあとで確認/.test(mails[0].body), "メールで「確認 1件」と警告の中身を知らせる: " + (mails[0] || {}).subject);
 
 console.log("== 4回目: ルールを直して（変換表に 4/6四裁 を足す）、sample D をもう一度送る");

@@ -124,6 +124,36 @@ def run():
     except ValueError as e:
         assert "company_closed" in str(e), e
 
+    # 営業日: 第2・4・5土曜日は営業日、第1・3土曜日と日曜は休み(岩崎様 2026-09-30)
+    add = conv._add_business_days
+    assert add(_dt.date(2026, 10, 2), 1) == _dt.date(2026, 10, 5)    # 10/3 は第1土曜日 → 休み
+    assert add(_dt.date(2026, 10, 9), 1) == _dt.date(2026, 10, 10)   # 10/10 は第2土曜日 → 営業日
+    assert add(_dt.date(2026, 10, 16), 1) == _dt.date(2026, 10, 19)  # 10/17 は第3土曜日 → 休み
+    assert add(_dt.date(2026, 10, 23), 1) == _dt.date(2026, 10, 24)  # 10/24 は第4土曜日 → 営業日
+    assert add(_dt.date(2026, 10, 30), 1) == _dt.date(2026, 10, 31)  # 10/31 は第5土曜日 → 営業日
+    assert add(_dt.date(2029, 8, 10), 1) == _dt.date(2029, 8, 13)    # 第2土曜日でも祝日(山の日)なら休み
+    cfg4 = yaml.safe_load(yaml.safe_dump(CFG))
+    cfg4["delivery"]["working_saturdays"] = [2, 6]  # 第6土曜日は無い → 書き間違いは起動時に止める
+    try:
+        SaneiConverter(cfg4)
+        raise AssertionError("working_saturdays の書き間違いがエラーにならない")
+    except ValueError as e:
+        assert "working_saturdays" in str(e), e
+
+    # 表に無い寸法は、用紙サイズ・印刷サイズを空白にして知らせる(岩崎様「空白でOK」)
+    w = []
+    assert conv._convert_size("4/6四裁", w) == ("", "") and w and w[0].startswith("[寸法なし]"), w
+    cfg5 = yaml.safe_load(yaml.safe_dump(CFG))
+    cfg5["size_unknown"] = "estimate"  # 推定に戻すこともできる
+    w = []
+    assert SaneiConverter(cfg5)._convert_size("4/6四裁", w) == ("46四判", "46四") and w[0].startswith("[寸法推定]"), w
+
+    # 校正×DVDジャケットは、いただいた文面(刷版備考・印刷備考)を使い、警告は出さない
+    w = []
+    assert conv._tpl("plate_note", "校正", True, w).endswith("加工 断裁 のみ") and not w, w
+    assert conv._tpl("print_note", "校正", True, w).startswith("先方支給 色校正合わせです") and not w, w
+    assert conv._tpl("delivery_note", "校正", True, w) == CFG["templates"]["delivery_note"]["proof"] and not w, w
+
     # encoding を utf-8-sig にしても BOM は二重にならない
     cfg2 = yaml.safe_load(yaml.safe_dump(CFG))
     cfg2["output"]["encoding"] = "utf-8-sig"
