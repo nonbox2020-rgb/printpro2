@@ -1,6 +1,6 @@
 // GAS 版の変換（2_rules.gs・3_converter.gs）を、アプリの正解CSV（tests/expected）と1バイトずつ比べる。
 //   node gas/step2_convert/test_converter.js
-// 架空サンプルA〜Dを変換し、ファイル名・中身（BOM・改行まで）・警告がすべて同じなら合格。
+// 架空サンプル（tests/samples のすべて）を変換し、ファイル名・中身（BOM・改行まで）・警告がすべて同じなら合格。
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");

@@ -40,14 +40,14 @@ python -m app.main
 ```bash
 python tools/run_sanei_demo.py path/to/CSV-A.csv --out ./out
 python tests/test_sanei_converter.py   # 合成データでの単体テスト
-python tests/test_samples.py           # 架空サンプルA〜Dの出力が期待どおりか（下記）
+python tests/test_samples.py           # 架空サンプルA〜Lの出力が期待どおりか（下記）
 python tests/test_agent_api.py         # 受け取り係のAPI（要 httpx）
 ```
 
 ### 自動テスト（GitHub Actions）
 
 GitHubに納める（プッシュする）たびに、`.github/workflows/tests.yml` が上の3つのテストを自動で実行します。
-`tests/samples/` の架空サンプルA〜D（実データではない）を変換し、`tests/expected/` の正解CSVと1バイトずつ比べます。
+`tests/samples/` の架空サンプルA〜L（実データではない）を変換し、`tests/expected/` の正解CSVと1バイトずつ比べます。
 Geminiに頼んだ修正で変換結果が変わってしまったら、ここが赤く（失敗に）なって気づけます。
 
 - 変換ルールをわざと変えたとき（例: 変換表に寸法を足した）は、結果が変わるのが正しいので正解CSVを作り直します:
@@ -148,7 +148,7 @@ Google Apps Script（GAS）だけで動く版です。Google Workspace の中で
 - 勘太郎のパソコンへ渡す（予定）: パソコン版 Google ドライブで「2_勘太郎用」を同期し、「移し係」（タスクスケジューラで5分おきに動く PowerShell）がデスクトップの指定フォルダへ移す。勘太郎側の設定は変えない。移し係はまだこのリポジトリに無い（未検証）
 - 練習のやり直し: `resetPractice` を実行（保存済みメールの記録を消す）。きれいにやり直すときは、先に「三映CSV連携」フォルダをゴミ箱に入れる
 - 確かめ方（Gmail・ドライブの偽物の上で動かす。GAS を直した後にも実行する）:
-  - `node gas/step2_convert/test_converter.js` … 架空サンプルA〜Dの変換結果が、アプリの正解CSV（`tests/expected`）と1バイトも違わないか
+  - `node gas/step2_convert/test_converter.js` … 架空サンプルA〜Lの変換結果が、アプリの正解CSV（`tests/expected`）と1バイトも違わないか
   - `node gas/step2_convert/test_main.js` … 保存・変換・同じ名前の `_2`・警告とエラーの知らせ・ルールを直したあと・やり直し・通知メール
   - `node gas/step1_save/test_save_sanei_csv.js` … 第1回の見本
 
@@ -176,7 +176,7 @@ printpro2/
 │   └── step2_convert/           # GAS 第2・3回: 保存して勘太郎CSVに変換（1_main・2_rules・3_converter ＋確認）
 ├── tests/
 │   ├── test_sanei_converter.py  # 合成データでの単体テスト
-│   ├── test_samples.py          # 架空サンプルA〜Dを変換し、正解CSVと比較
+│   ├── test_samples.py          # 架空サンプルA〜Lを変換し、正解CSVと比較
 │   ├── test_agent_api.py        # 受け取り係のAPI
 │   ├── samples/                 # 架空サンプル（実データではない）
 │   └── expected/                # 正解CSV
