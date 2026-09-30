@@ -190,7 +190,8 @@ printpro2/
 │   ├── setup_kantaro_agent.bat          # 受け取り係のかんたん設定（ダブルクリック）
 │   ├── kantaro_agent_installer.ps1      # かんたん設定の本体（URL・合言葉・フォルダを聞いて登録）
 │   ├── kantaro_agent.config.sample.json # 受け取り係の設定の見本（手で設定する場合）
-│   └── windows/                         # 移し係: Googleドライブの勘太郎CSVを勘太郎のフォルダへ（かんたん設定＋確認）
+│   ├── windows/                         # 移し係: Googleドライブの勘太郎CSVを勘太郎のフォルダへ（かんたん設定＋確認）
+│   └── mac/                             # 移し係の Mac 版（下書き。本体だけで、入れ方の setup はまだ無い）
 ├── gas/
 │   ├── step1_save/              # GAS 第1回: Gmail の三映CSVを Googleドライブへ保存するだけ（＋確認）
 │   └── step2_convert/           # GAS 第2・3回: 保存して勘太郎CSVに変換（1_main・2_rules・3_converter ＋確認）
