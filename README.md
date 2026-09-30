@@ -123,15 +123,34 @@ Geminiに頼んだ修正で変換結果が変わってしまったら、ここ�
 - 同じ中身をもう一度出力した場合は、新しいファイルとして届ける。指定フォルダに同じ名前がまだ残っていたら上書きせず `_2` を付ける
 - 合言葉が違う・アプリにつながらないときは何も動かさず、`kantaro_agent.log` に「エラー: …」を残す
 
-## GAS：Gmail に届いた三映CSVを Googleドライブへ自動保存（研修の見本）
+## GAS：Gmail に届いた三映CSVを、Googleドライブで勘太郎CSVに変換する（研修）
 
-`gas/save_sanei_csv.gs` は、Google Apps Script（GAS）の見本です。Gmail に届いた CSV 添付を、Googleドライブの「連携用フォルダ」へ保存します。Google Workspace だけで動くため、費用は0円です。研修（GAS実習）で使います。
+Google Apps Script（GAS）だけで動く版です。Google Workspace の中で動くため、費用は0円です。研修（GAS実習）で使います。
 
-- 使い方: script.google.com で新しいプロジェクトを作り、このファイルの中身を貼る →「実行」（最初に1回だけ許可）→ トリガーで `saveSaneiCsv` を「分ベース・5分おき」にする
-- 探す条件: 7日以内に届いた、CSV が添付されたメール。ファイル名の前に受け取った日時（例 `20261001_0930_`）を付けて保存する。CSV の中身（文字コード）は変えない
-- 二度保存しない: 保存したメールの ID を1通ずつ覚える（Gmail は同じ件名のメールを1つのスレッドにまとめるため、スレッド単位で覚えると2通目を取りこぼす）。スレッドには目印のラベル `sanei-saved` を付ける
-- 本番で使う前に: 三映様のアドレスで絞る（`SEARCH` に `from:（三映様のアドレス）` を足す）。そのままでは、CSV が添付されたメールをすべて保存する
-- 確かめ方: `node gas/test_save_sanei_csv.js`（Gmail・Googleドライブの偽物の上で動かす。Gemini で直した後にも実行する）
+- **第1回 `gas/step1_save/`**: `save_sanei_csv.gs` … Gmail に届いた CSV 添付を、そのままドライブへ保存するだけ
+- **第2回 `gas/step2_convert/`**: 保存に加えて、アプリと同じルールで勘太郎CSV（35列・1案件1ファイル）に変換する
+  - `1_main.gs`（流れ）・`2_rules.gs`（変換のルール。中身は `sanei_config.yaml` と同じ）・`3_converter.gs`（変換のしくみ。`app/sanei_converter.py` と同じ動き）
+  - 使い方: script.google.com のプロジェクトに3つのファイルを作って貼る → `saveSaneiCsv` を実行（最初に1回だけ許可）→ トリガーで `saveSaneiCsv` を「分ベース・5分おき」に（第1回のトリガーがそのまま使える）
+  - ドライブの中は、すべて「三映CSV連携」フォルダにまとめる:
+
+```
+三映CSV連携/
+├── 1_受信/2026-09-30/       Gmail に届いた三映CSV（元のまま）。受け取った日ごと
+├── 2_勘太郎用/2026-10-01/   変換できた勘太郎CSV（BOM付きUTF-8）。下版予定日ごと
+├── 3_要確認/2026-10-02/     警告があった案件（変換表に無い寸法・二重など）。勘太郎へは出さない
+├── 4_もう一度変換/           ルールを直したあと、三映CSVをここへ入れると変換し直す
+└── 変換の記録               スプレッドシート（いつ・どのCSVの・どの案件を・どこへ）
+```
+
+- 警告のある案件は「3_要確認」へ分け、メールで知らせる（人の確認を残す）。同じ名前の勘太郎CSVがすでに「2_勘太郎用」にあれば、二重登録を防ぐため「3_要確認」へ回す。変換し直しのときは、勘太郎用にある案件は出し直さない
+- 祝日は GAS の中で計算する（振替休日・国民の休日を含む。2022〜2060年の全日で `jpholiday` と一致を確認）
+- 二度保存しない: 保存したメールの ID を1通ずつ覚える（Gmail は同じ件名のメールを1つのスレッドにまとめるため、スレッド単位で覚えると2通目を取りこぼす）
+- 本番で使う前に: `SEARCH` に `from:（三映様のアドレス）` を足す。勘太郎のパソコンへドライブを同期して渡すときは `GROUP_BY_DATE` を `false` にする
+- 練習のやり直し: `resetPractice` を実行（保存済みメールの記録を消す）。きれいにやり直すときは、先に「三映CSV連携」フォルダを消す
+- 確かめ方（Gmail・ドライブの偽物の上で動かす。GAS を直した後にも実行する）:
+  - `node gas/step2_convert/test_converter.js` … 架空サンプルA〜Dの変換結果が、アプリの正解CSV（`tests/expected`）と1バイトも違わないか
+  - `node gas/step2_convert/test_main.js` … 保存・変換・フォルダ分け・二重防止・変換し直し・エラー・通知メール
+  - `node gas/step1_save/test_save_sanei_csv.js` … 第1回の見本
 
 ## ファイル構成
 
@@ -153,8 +172,8 @@ printpro2/
 │   ├── kantaro_agent_installer.ps1      # かんたん設定の本体（URL・合言葉・フォルダを聞いて登録）
 │   └── kantaro_agent.config.sample.json # 受け取り係の設定の見本（手で設定する場合）
 ├── gas/
-│   ├── save_sanei_csv.gs        # GAS: Gmail の三映CSVを Googleドライブへ自動保存（研修の見本）
-│   └── test_save_sanei_csv.js   # その確認（Gmail・ドライブの偽物で動かす）
+│   ├── step1_save/              # GAS 第1回: Gmail の三映CSVを Googleドライブへ保存するだけ（＋確認）
+│   └── step2_convert/           # GAS 第2回: 保存して勘太郎CSVに変換（1_main・2_rules・3_converter ＋確認）
 ├── tests/
 │   ├── test_sanei_converter.py  # 合成データでの単体テスト
 │   ├── test_samples.py          # 架空サンプルA〜Dを変換し、正解CSVと比較

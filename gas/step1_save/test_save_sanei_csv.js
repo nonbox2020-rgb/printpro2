@@ -1,5 +1,5 @@
 // save_sanei_csv.gs を、Gmail・Googleドライブの偽物の上で動かして確かめる。
-//   node gas/test_save_sanei_csv.js
+//   node gas/step1_save/test_save_sanei_csv.js
 // GAS の画面に貼る前や、Gemini で直した後に実行する（本物の Gmail には触らない）。
 const fs = require("fs");
 const path = require("path");
