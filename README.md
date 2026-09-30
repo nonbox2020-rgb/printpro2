@@ -123,6 +123,16 @@ Geminiに頼んだ修正で変換結果が変わってしまったら、ここ�
 - 同じ中身をもう一度出力した場合は、新しいファイルとして届ける。指定フォルダに同じ名前がまだ残っていたら上書きせず `_2` を付ける
 - 合言葉が違う・アプリにつながらないときは何も動かさず、`kantaro_agent.log` に「エラー: …」を残す
 
+## GAS：Gmail に届いた三映CSVを Googleドライブへ自動保存（研修の見本）
+
+`gas/save_sanei_csv.gs` は、Google Apps Script（GAS）の見本です。Gmail に届いた CSV 添付を、Googleドライブの「連携用フォルダ」へ保存します。Google Workspace だけで動くため、費用は0円です。研修（GAS実習）で使います。
+
+- 使い方: script.google.com で新しいプロジェクトを作り、このファイルの中身を貼る →「実行」（最初に1回だけ許可）→ トリガーで `saveSaneiCsv` を「分ベース・5分おき」にする
+- 探す条件: 7日以内に届いた、CSV が添付されたメール。ファイル名の前に受け取った日時（例 `20261001_0930_`）を付けて保存する。CSV の中身（文字コード）は変えない
+- 二度保存しない: 保存したメールの ID を1通ずつ覚える（Gmail は同じ件名のメールを1つのスレッドにまとめるため、スレッド単位で覚えると2通目を取りこぼす）。スレッドには目印のラベル `sanei-saved` を付ける
+- 本番で使う前に: 三映様のアドレスで絞る（`SEARCH` に `from:（三映様のアドレス）` を足す）。そのままでは、CSV が添付されたメールをすべて保存する
+- 確かめ方: `node gas/test_save_sanei_csv.js`（Gmail・Googleドライブの偽物の上で動かす。Gemini で直した後にも実行する）
+
 ## ファイル構成
 
 ```
@@ -142,6 +152,9 @@ printpro2/
 │   ├── setup_kantaro_agent.bat          # 受け取り係のかんたん設定（ダブルクリック）
 │   ├── kantaro_agent_installer.ps1      # かんたん設定の本体（URL・合言葉・フォルダを聞いて登録）
 │   └── kantaro_agent.config.sample.json # 受け取り係の設定の見本（手で設定する場合）
+├── gas/
+│   ├── save_sanei_csv.gs        # GAS: Gmail の三映CSVを Googleドライブへ自動保存（研修の見本）
+│   └── test_save_sanei_csv.js   # その確認（Gmail・ドライブの偽物で動かす）
 ├── tests/
 │   ├── test_sanei_converter.py  # 合成データでの単体テスト
 │   ├── test_samples.py          # 架空サンプルA〜Dを変換し、正解CSVと比較
