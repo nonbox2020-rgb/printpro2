@@ -1,5 +1,6 @@
 // ===== 三映CSV → 勘太郎CSV 自動変換（Gmail → Googleドライブ）=====
 // ファイルは3つ: 1_main.gs（この流れ）・2_rules.gs（変換のルール）・3_converter.gs（変換のしくみ）
+// 勘太郎のパソコンが取りに来る受け取り口を使うときは、4_webapp.gs も足す（入れ方は 4_webapp.gs の先頭）
 //
 // ■ はじめに1回だけ: setup を実行する（最初に Gmail・ドライブ・メール送信の許可を聞かれるので「許可」）
 //   - 下の「設定」をスクリプト プロパティに作る（値は「未設定」、KEEP_DAYS は 3）
@@ -15,7 +16,8 @@
 //   NOTIFY_TO      結果を知らせるメールアドレス。複数はカンマ区切り。「未設定」ならこのアカウントへ
 //   KEEP_DAYS      ドライブに保存したCSVを残す日数（初めは 3）。過ぎたらゴミ箱へ（30日間は元に戻せる）。0 なら消さない
 //   設定を変えたら checkSettings を実行すると、どのメールが対象になるかを確かめられる。
-//   done・LAST_CLEANUP は GAS が使う控えなので触らない。
+//   done・LAST_CLEANUP・AGENT_LAST_SEEN・PICKUP_ALERTED は GAS が使う控えなので触らない。
+//   AGENT_TOKEN は受け取り口の合言葉（4_webapp.gs の makeAgentToken で作る）。
 //
 // ■ ドライブの中（すべて「三映CSV連携」フォルダの中）:
 //   1_受信/2026-09-30/   Gmail に届いた三映CSV（元のまま）。受け取った日ごと
@@ -64,6 +66,7 @@ function saveSaneiCsv() {
 
   if (results.length) notify_(root, results, s);
   cleanupIfDue_(root, log, s);
+  if (typeof watchPickup_ === 'function') watchPickup_(root, s);   // 4_webapp.gs があるとき: 受け取りの見張り
 }
 
 // 1つの三映CSVを変換し、案件ごとに「2_勘太郎用」へ保存する

@@ -22,3 +22,15 @@ jobs:
         run: python tests/test_samples.py
       - name: 勘太郎パソコンの受け取り係のAPI
         run: python tests/test_agent_api.py
+      - name: GAS 版の変換（アプリの正解と1バイトずつ比べる）
+        run: node gas/step2_convert/test_converter.js
+      - name: GAS 版の全体（Gmail・ドライブ・受け取り口の偽物の上で）
+        run: node gas/step2_convert/test_main.js
+      - name: GAS 第1回の見本
+        run: node gas/step1_save/test_save_sanei_csv.js
+      - name: 勘太郎のパソコンの受け取り係（GAS 版）
+        shell: pwsh
+        run: ./tools/kantaro_pc/test_kantaro_gas_agent.ps1
+      - name: 移し係（Windows）
+        shell: pwsh
+        run: ./tools/windows/test_kantaro_mover.ps1

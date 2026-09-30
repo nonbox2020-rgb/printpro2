@@ -26,6 +26,7 @@ class Blob {
     return new TextDecoder(enc).decode(this.bytes);   // UTF-8 で読めない所は � になる（GAS と同じ）
   }
   copyBlob() { return new Blob(this.bytes, this.name, this.type); }
+  getBytes() { return this.bytes; }
 }
 const folders = [], files = [];
 const iter = (list) => { let i = 0; return { hasNext: () => i < list.length, next: () => list[i++] }; };
@@ -33,6 +34,8 @@ class File {
   constructor(blob, parent) { this.id = "f" + ++seq; this.blob = blob; this.parent = parent; this.trashed = false; this.created = new Date(); }
   getId() { return this.id; }
   getDateCreated() { return this.created; }
+  getSize() { return this.blob.bytes.length; }
+  getParents() { return iter([this.parent]); }
   getName() { return this.blob.name; }
   getBlob() { return this.blob.copyBlob(); }
   moveTo(folder) { this.parent = folder; return this; }
@@ -44,6 +47,7 @@ class Folder {
   constructor(name, parent) { this.id = "d" + ++seq; this.name = name; this.parent = parent; this.trashed = false; this.created = new Date(); }
   getName() { return this.name; }
   getDateCreated() { return this.created; }
+  getId() { return this.id; }
   getFolders() { return iter(folders.filter((f) => f.parent === this)); }
   setTrashed(v) { this.trashed = v; return this; }
   isTrashed() { return this.trashed; }
@@ -92,7 +96,11 @@ const sandbox = {
   console: { log: (...a) => logs.push(a.join(" ")) },
   DriveApp: {
     getRootFolder: () => myDrive,
-    getFileById: (id) => files.find((f) => f.id === id),
+    getFileById: (id) => {   // 本物と同じく、無い id ならエラー
+      const f = files.find((x) => x.id === id);
+      if (!f) throw new Error("ファイルが見つかりません: " + id);
+      return f;
+    },
   },
   GmailApp: {
     getUserLabelByName: (n) => labels[n] || null,
@@ -127,7 +135,13 @@ const sandbox = {
   },
   MailApp: { sendEmail: (to, subject, body) => sent.push({ to, subject, body }) },
   Session: { getEffectiveUser: () => ({ getEmail: () => "iwasaki@yushin-p.example" }) },
+  ContentService: {
+    MimeType: { JSON: "application/json" },
+    createTextOutput: (text) => ({ text, mime: "", setMimeType(m) { this.mime = m; return this; } }),
+  },
   Utilities: {
+    getUuid: () => require("crypto").randomUUID(),
+    base64Encode: (bytes) => Buffer.from(bytes).toString("base64"),
     newBlob: (s) => new Blob(Buffer.from(s || "", "utf8"), "", ""),
     formatDate: (d, tz, f) => {
       const t = jst(d);
@@ -137,7 +151,7 @@ const sandbox = {
   },
 };
 vm.createContext(sandbox);
-vm.runInContext(["1_main.gs", "2_rules.gs", "3_converter.gs"]
+vm.runInContext(["1_main.gs", "2_rules.gs", "3_converter.gs", "4_webapp.gs"]
   .map((n) => fs.readFileSync(path.join(__dirname, n), "utf8")).join("\n") + "\nthis.RULES = RULES;", sandbox);
 
 // ---------------- 確かめる道具 ----------------
@@ -302,6 +316,54 @@ props.KEEP_DAYS = "三日";
 delete props.LAST_CLEANUP;
 run();
 check(recent.trashed, "KEEP_DAYS が数字でなければ 3日として消す");
+
+console.log("== 受け取り口（4_webapp.gs・勘太郎のパソコンが取りに来る）");
+const get = (params) => {
+  const o = vm.runInContext("doGet", sandbox)({ parameter: params });
+  return Object.assign({ mime: o.mime }, JSON.parse(o.text));
+};
+check(get({ action: "list" }).ok === false && /合言葉/.test(get({ action: "list", token: "x" }).error), "合言葉が無い・違うときは渡さない");
+const token = vm.runInContext("makeAgentToken()", sandbox);
+check(/^[0-9a-f]{64}$/.test(token) && props.AGENT_TOKEN === token && logs.some((l) => l.includes(token)), "makeAgentToken で合言葉を作り、実行ログに出す");
+check(vm.runInContext("makeAgentToken()", sandbox) === token, "もう一度実行しても、合言葉は変わらない");
+const ping = get({ action: "ping", token });
+check(ping.ok && ping.account === "iwasaki@yushin-p.example" && ping.mime === "application/json", "ping: つながる（JSON で答える）");
+check(Number(props.AGENT_LAST_SEEN) > 0, "取りに来た時刻を控える");
+const outNow = files.filter((f) => f.parent === folderAt(P, "2_勘太郎用") && !f.trashed);
+outNow.forEach((f, i) => { f.created = new Date(Date.UTC(2026, 8, 30, 0, 0, outNow.length - i)); });   // 名前と逆の順に作ったことにする
+const listed = get({ action: "list", token });
+check(listed.ok && listed.files.length === outNow.length, "list: 「2_勘太郎用」の勘太郎CSVを全部出す（" + outNow.length + "件）");
+check(listed.files[0].id === outNow[outNow.length - 1].id, "list: 古い順");
+check(listed.files.every((x) => x.size === files.find((f) => f.id === x.id).blob.bytes.length), "list: 大きさ（バイト）も出す");
+const first = files.find((f) => f.id === listed.files[0].id);
+const got = get({ action: "file", id: first.id, token });
+check(got.ok && got.name === first.getName() && Buffer.from(got.data, "base64").equals(first.blob.bytes) && got.size === first.blob.bytes.length,
+  "file: 中身を1バイトも変えずに渡す（base64）");
+const inboxFile = files.find((f) => f.parent && f.parent.parent === folderAt(P, "1_受信") && !f.trashed) ||
+  files.find((f) => f.parent === folderAt(P) && f.getName() === "変換の記録");
+check(get({ action: "file", id: inboxFile.id, token }).ok === false, "「2_勘太郎用」以外のファイルは渡さない");
+check(get({ action: "file", id: "no-such-id", token }).ok === false, "無い id は ok:false");
+check(get({ action: "done", id: first.id, token }).ok && first.parent === folderAt(P, "3_渡し済み"), "done: 「3_渡し済み」へ移す");
+check(logRows().some((r) => r[5] === first.getName() && r[6] === "勘太郎のパソコンが受け取りました"), "done: 変換の記録に「受け取りました」");
+check(get({ action: "done", id: first.id, token }).ok === true, "done がもう一度来ても ok（二度知らせても大丈夫）");
+check(!get({ action: "list", token }).files.some((x) => x.id === first.id), "渡したものは、次の list に出ない");
+const second = files.find((f) => f.id === listed.files[1].id);
+check(get({ action: "skip", id: second.id, token }).ok && second.parent === folderAt(P, "4_渡さなかった分"), "skip: 「4_渡さなかった分」へよける");
+check(get({ action: "whatever", token }).ok === false, "知らない action は ok:false");
+
+console.log("== 受け取りの見張り（30分以上残っていたら知らせる）");
+const stuck = files.find((f) => f.id === listed.files[2].id);
+stuck.created = new Date(Date.now() - 31 * 60 * 1000);
+files.filter((f) => f.parent === folderAt(P, "2_勘太郎用") && f !== stuck).forEach((f) => { f.created = new Date(); });
+props.KEEP_DAYS = "3";
+mails = run();
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎のパソコンが受け取っていません 1件" && mails[0].body.includes(stuck.getName()) &&
+  mails[0].to === "a@yushin-p.example,b@yushin-p.example", "30分以上残っていたら、知らせる先へメール: " + (mails[0] || {}).subject);
+check(run().length === 0, "知らせるのは1回だけ");
+files.filter((f) => f.parent === folderAt(P, "2_勘太郎用")).forEach((f) => get({ action: "done", id: f.id, token }));
+mails = run();
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎のパソコンの受け取りが元にもどりました", "受け取られたら「元にもどりました」");
+check(run().length === 0, "元にもどったあとは何も送らない");
 
 if (failed) {
   console.log(`❌ ${failed} 件が期待と違います`);

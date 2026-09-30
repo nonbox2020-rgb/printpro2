@@ -46,7 +46,7 @@ python tests/test_agent_api.py         # 受け取り係のAPI（要 httpx）
 
 ### 自動テスト（GitHub Actions）
 
-GitHubに納める（プッシュする）たびに、`.github/workflows/tests.yml` が上の3つのテストを自動で実行します。
+GitHubに納める（プッシュする）たびに、`.github/workflows/tests.yml` が上の3つのテストと、GAS 版・受け取り係・移し係のテストを自動で実行します。
 `tests/samples/` の架空サンプルA〜L（実データではない）を変換し、`tests/expected/` の正解CSVと1バイトずつ比べます。
 Geminiに頼んだ修正で変換結果が変わってしまったら、ここが赤く（失敗に）なって気づけます。
 
@@ -130,6 +130,7 @@ Google Apps Script（GAS）だけで動く版です。Google Workspace の中で
 - **第1回 `gas/step1_save/`**: `save_sanei_csv.gs` … Gmail に届いた CSV 添付を、そのままドライブへ保存するだけ
 - **第2・3回 `gas/step2_convert/`**: 保存に加えて、アプリと同じルールで勘太郎CSV（35列・1案件1ファイル）に変換する
   - `1_main.gs`（流れ）・`2_rules.gs`（変換のルール。中身は `sanei_config.yaml` と同じ）・`3_converter.gs`（変換のしくみ。`app/sanei_converter.py` と同じ動き）
+  - `4_webapp.gs`（勘太郎のパソコンの受け取り係が取りに来る受け取り口。下の「受け取り係（GAS 版）」で使う）
   - 使い方: script.google.com のプロジェクトに3つのファイルを作って貼る → `setup` を1回実行（許可を聞かれたら許可）。設定の欄と、5分おきに `saveSaneiCsv` を動かすトリガーができる
   - 設定はコードではなく「スクリプト プロパティ」で変える（プロジェクトの設定 → スクリプト プロパティ）。変えたら `checkSettings` で、見ている Gmail・Gmail の検索・対象になるメールの数を確かめる
 
@@ -155,12 +156,31 @@ Google Apps Script（GAS）だけで動く版です。Google Workspace の中で
 - 二度保存しない: 保存したメールの ID を1通ずつ覚える（Gmail は同じ件名のメールを1つのスレッドにまとめるため、スレッド単位で覚えると2通目を取りこぼす）
 - ドライブのCSV（1_受信・2_勘太郎用・3_渡し済み など、「三映CSV連携」の中のすべての .csv）は、保存して `KEEP_DAYS` 日たったらゴミ箱へ移す。空になった日付のフォルダも片づける。「変換の記録」は消さない。「2_勘太郎用」から消したもの（勘太郎へ渡していないかもしれないもの）は、名前つきでメールで知らせる
 - 本番で使う前に: `SANEI_FROM` に三映様のアドレスを入れる（入れないと、CSV つきのメールをすべて変換する）
-- 勘太郎のフォルダへ渡す: 下の「移し係（Windows）」。勘太郎側の設定は変えない
+- 勘太郎のフォルダへ渡す: 下の「受け取り係（GAS 版）」（勘太郎のパソコン自身が取りに来る。おすすめ）か「移し係（Windows）」（別のパソコンが中継する）。勘太郎側の設定は変えない
 - 練習のやり直し: `resetPractice` を実行（保存済みメールの記録を消す）。きれいにやり直すときは、先に「三映CSV連携」フォルダをゴミ箱に入れる
 - 確かめ方（Gmail・ドライブの偽物の上で動かす。GAS を直した後にも実行する）:
   - `node gas/step2_convert/test_converter.js` … 架空サンプルA〜Lの変換結果が、アプリの正解CSV（`tests/expected`）と1バイトも違わないか
-  - `node gas/step2_convert/test_main.js` … 保存・変換・同じ名前の `_2`・警告とエラーの知らせ・ルールを直したあと・やり直し・通知メール・設定（setup・送り主・届くアドレス・知らせる先・checkSettings）・日数が過ぎたCSVの削除
+  - `node gas/step2_convert/test_main.js` … 保存・変換・同じ名前の `_2`・警告とエラーの知らせ・ルールを直したあと・やり直し・通知メール・設定（setup・送り主・届くアドレス・知らせる先・checkSettings）・日数が過ぎたCSVの削除・受け取り口（4_webapp）と受け取りの見張り
   - `node gas/step1_save/test_save_sanei_csv.js` … 第1回の見本
+
+## 受け取り係（GAS 版）：勘太郎のパソコンが、GAS から勘太郎CSVを取りに来る
+
+勘太郎のパソコン（Windows Server 2012 R2）自身が5分おきに GAS の受け取り口（`gas/step2_convert/4_webapp.gs` のウェブアプリ）へ取りに行き、勘太郎の csv フォルダへ入れます。中継のパソコン・パソコン版 Google ドライブ・共有フォルダは要りません。費用は0円です。
+
+```
+Gmail → GAS（変換）→ Googleドライブ「三映CSV連携/2_勘太郎用」
+                        ↑ 5分おきに「新しいCSVは？」（合言葉つき・https）
+勘太郎のパソコンの受け取り係（SYSTEM・5分おき）→ csv フォルダ → 勘太郎が取り込む
+受け取ったもの → 「3_渡し済み」（GAS が移す。二度届かない）
+```
+
+- GAS 側（1回だけ）: `4_webapp.gs` を足す → `makeAgentToken` を実行して合言葉を控える → 「デプロイ」→「新しいデプロイ」→「ウェブアプリ」（次のユーザーとして実行: 自分、アクセスできるユーザー: 全員）→ URL（…/exec）を控える
+- 勘太郎のパソコン: `tools/kantaro_pc/` の3つのファイル（`setup_kantaro_gas_agent.bat`・`setup_kantaro_gas_agent.ps1`・`kantaro_gas_agent.ps1`）を同じフォルダに置き、`setup_kantaro_gas_agent.bat` をダブルクリック（管理者の許可を求める）→ URL・合言葉・csv フォルダ（Enter で `C:\Program Files\FileMaker\FileMaker Server\Data\Documents\csv`）
+  - まだ渡していないCSV（研修のダミーデータなど）があれば一覧を出し、渡す（Y）か「4_渡さなかった分」へよける（N）かを聞く
+  - `C:\kantaro-gas-agent\` に受け取り係・設定（`kantaro_gas_agent.config.json`、管理者と SYSTEM だけが読める）・記録（`kantaro_gas_agent.log`）を置き、タスクスケジューラに `kantaro-gas-agent` を登録する（起動時と5分おき。SYSTEM として動くので、だれもログオンしていなくても動く）
+- 入れ方: 「.名前.tmp」で書いてから名前を変える（書きかけを読ませない）。同じ名前があれば `_2`、`_3` … を付ける。入れたものは控え（`kantaro_gas_agent.delivered.txt`）に書き、GAS への知らせが届かなくても二重には入れない
+- 見張り: 「2_勘太郎用」に30分以上残っているCSVがあると、GAS が「勘太郎のパソコンが受け取っていません」とメールで1回知らせる（受け取られたら「元にもどりました」）
+- 確かめ方: `pwsh -NoProfile -File tools/kantaro_pc/test_kantaro_gas_agent.ps1`（偽物の GAS `fake_gas_webapp.py` の上で、受け取り係とかんたん設定を動かす）
 
 ## 移し係（Windows）：Googleドライブの勘太郎CSVを、勘太郎のフォルダへ移す
 
@@ -200,11 +220,12 @@ printpro2/
 │   ├── setup_kantaro_agent.bat          # 受け取り係のかんたん設定（ダブルクリック）
 │   ├── kantaro_agent_installer.ps1      # かんたん設定の本体（URL・合言葉・フォルダを聞いて登録）
 │   ├── kantaro_agent.config.sample.json # 受け取り係の設定の見本（手で設定する場合）
+│   ├── kantaro_pc/                      # 受け取り係（GAS 版）: 勘太郎のパソコンが GAS から取りに来る（かんたん設定＋確認）
 │   ├── windows/                         # 移し係: Googleドライブの勘太郎CSVを勘太郎のフォルダへ（かんたん設定＋確認）
 │   └── mac/                             # 移し係の Mac 版（下書き。本体だけで、入れ方の setup はまだ無い）
 ├── gas/
 │   ├── step1_save/              # GAS 第1回: Gmail の三映CSVを Googleドライブへ保存するだけ（＋確認）
-│   └── step2_convert/           # GAS 第2・3回: 保存して勘太郎CSVに変換（1_main・2_rules・3_converter ＋確認）
+│   └── step2_convert/           # GAS 本番・第2・3回: 保存して勘太郎CSVに変換（1_main・2_rules・3_converter・4_webapp ＋確認）
 ├── tests/
 │   ├── test_sanei_converter.py  # 合成データでの単体テスト
 │   ├── test_samples.py          # 架空サンプルA〜Lを変換し、正解CSVと比較
