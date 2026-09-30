@@ -36,16 +36,20 @@ class File {
   getBlob() { return this.blob.copyBlob(); }
   moveTo(folder) { this.parent = folder; return this; }
   setTrashed(v) { this.trashed = v; return this; }
+  isTrashed() { return this.trashed; }
 }
+// 本物のドライブと同じく、ゴミ箱に入れたものも名前で見つかる（使う側で isTrashed を確かめる）
 class Folder {
-  constructor(name, parent) { this.id = "d" + ++seq; this.name = name; this.parent = parent; }
+  constructor(name, parent) { this.id = "d" + ++seq; this.name = name; this.parent = parent; this.trashed = false; }
   getName() { return this.name; }
+  setTrashed(v) { this.trashed = v; return this; }
+  isTrashed() { return this.trashed; }
   getUrl() { return "https://drive.google.com/drive/folders/" + this.id; }
   getFoldersByName(n) { return iter(folders.filter((f) => f.parent === this && f.name === n)); }
   createFolder(n) { const f = new Folder(n, this); folders.push(f); return f; }
   createFile(blob) { const f = new File(blob.copyBlob(), this); files.push(f); return f; }
-  getFilesByName(n) { return iter(files.filter((f) => f.parent === this && !f.trashed && f.getName() === n)); }
-  getFiles() { return iter(files.filter((f) => f.parent === this && !f.trashed)); }
+  getFilesByName(n) { return iter(files.filter((f) => f.parent === this && f.getName() === n)); }
+  getFiles() { return iter(files.filter((f) => f.parent === this)); }
 }
 const myDrive = new Folder("マイドライブ", null);
 folders.push(myDrive);
@@ -115,13 +119,13 @@ vm.runInContext(["1_main.gs", "2_rules.gs", "3_converter.gs"]
 // ---------------- 確かめる道具 ----------------
 let failed = 0;
 const check = (ok, name) => { console.log((ok ? "  OK  " : "  NG  ") + name); if (!ok) failed++; };
-const folderAt = (...names) => names.reduce((f, n) => f && folders.find((x) => x.parent === f && x.name === n), myDrive);
+const folderAt = (...names) => names.reduce((f, n) => f && folders.find((x) => x.parent === f && x.name === n && !x.trashed), myDrive);
 const namesIn = (...names) => {
   const f = folderAt(...names);
   return f ? files.filter((x) => x.parent === f && !x.trashed).map((x) => x.getName()).sort() : [];
 };
 const expectedNames = (s) => fs.readdirSync(path.join(EXPECTED, s)).filter((n) => n !== "warnings.txt").sort();
-const logRows = () => { const f = files.find((x) => x.getName() === "変換の記録"); return sheets[f.id].getSheets()[0].rows; };
+const logRows = () => { const f = files.find((x) => x.getName() === "変換の記録" && x.parent === folderAt(P)); return sheets[f.id].getSheets()[0].rows; };
 const run = () => { const before = sent.length; vm.runInContext("saveSaneiCsv()", sandbox); return sent.slice(before); };
 const P = "三映CSV連携";
 
@@ -187,9 +191,17 @@ check(mails.length === 1 && /エラー 1件/.test(mails[0].subject), "変換で�
 check(namesIn(P, "1_受信", "2026-09-30").includes("1100_report.csv"), "元のファイルは 1_受信 に残る");
 check(logRows().some((r) => r[5] === "エラー（変換できない）"), "変換の記録にエラーの行");
 
-console.log("== 練習のやり直し（resetPractice）");
+console.log("== 練習のやり直し（「三映CSV連携」をゴミ箱に入れて resetPractice → saveSaneiCsv）");
+const oldRoot = folderAt(P);
+oldRoot.setTrashed(true);
 vm.runInContext("resetPractice()", sandbox);
 check(!("done" in props), "保存済みメールの記録が消える");
+mails = run();
+check(folderAt(P) && folderAt(P) !== oldRoot, "ゴミ箱のフォルダは使わず、新しい「三映CSV連携」を作る");
+check(namesIn(P, "2_勘太郎用", "2026-10-01").length === 5 && namesIn(P, "2_勘太郎用", "2026-12-30").length === 2 &&
+  namesIn(P, "2_勘太郎用", "2026-10-02").length === 1 && namesIn(P, "3_要確認", "2026-10-01").length === 5 &&
+  namesIn(P, "3_要確認", "2026-10-02").length === 0,
+"新しいフォルダで最初から変換し直す（A・B・D は勘太郎用。D は直したルールで。C は二重で要確認）");
 
 if (failed) {
   console.log(`❌ ${failed} 件が期待と違います`);

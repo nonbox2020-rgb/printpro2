@@ -41,7 +41,10 @@ function saveSaneiCsv() {
   // ② 「4_もう一度変換」に入れられた三映CSVを変換し直し、「1_受信」へ戻す
   const again = [];
   const files = childFolder_(root, '4_もう一度変換').getFiles();
-  while (files.hasNext()) again.push(files.next());
+  while (files.hasNext()) {
+    const file = files.next();
+    if (!file.isTrashed()) again.push(file);
+  }
   again.forEach(file => {
     results.push(convertFile_(root, file, true, log));
     file.moveTo(childFolder_(childFolder_(root, '1_受信'), day_(new Date())));
@@ -69,7 +72,7 @@ function convertFile_(root, file, isAgain, log) {
     const okDir = outFolder_(root, '2_勘太郎用', res.plateDate);
     const checkDir = outFolder_(root, '3_要確認', res.plateDate);
     const warnings = c.warnings.slice();
-    const already = okDir.getFilesByName(c.fileName).hasNext();
+    const already = hasFile_(okDir, c.fileName);
     if (already && isAgain) {   // 変換し直し: 勘太郎用にあるものは出し直さない（勘太郎への二重登録を防ぐ）
       r.skipped++;
       log.appendRow([now_(), r.source, c.orderNo, c.section, c.rowCount, 'とばした（2_勘太郎用にあり）', '']);
@@ -108,21 +111,40 @@ function outFolder_(root, name, plateDate) {
   return childFolder_(dir, plateDate ? plateDate.split('/').join('-') : '下版予定日なし');
 }
 
-// フォルダの中のフォルダ（無ければ作る）
+// フォルダの中のフォルダ（無ければ作る）。ゴミ箱に入れたフォルダは使わない
 function childFolder_(parent, name) {
   const found = parent.getFoldersByName(name);
-  return found.hasNext() ? found.next() : parent.createFolder(name);
+  while (found.hasNext()) {
+    const folder = found.next();
+    if (!folder.isTrashed()) return folder;
+  }
+  return parent.createFolder(name);
+}
+
+// 同じ名前のファイルがあるか（ゴミ箱の中は数えない）
+function hasFile_(folder, name) {
+  const found = folder.getFilesByName(name);
+  while (found.hasNext()) {
+    if (!found.next().isTrashed()) return true;
+  }
+  return false;
 }
 
 function removeSame_(folder, name) {
   const found = folder.getFilesByName(name);
-  while (found.hasNext()) found.next().setTrashed(true);
+  while (found.hasNext()) {
+    const file = found.next();
+    if (!file.isTrashed()) file.setTrashed(true);
+  }
 }
 
 // 「変換の記録」スプレッドシート（無ければ作る）
 function openLog_(root) {
   const found = root.getFilesByName('変換の記録');
-  if (found.hasNext()) return SpreadsheetApp.openById(found.next().getId()).getSheets()[0];
+  while (found.hasNext()) {
+    const file = found.next();
+    if (!file.isTrashed()) return SpreadsheetApp.openById(file.getId()).getSheets()[0];
+  }
   const ss = SpreadsheetApp.create('変換の記録');
   DriveApp.getFileById(ss.getId()).moveTo(root);
   const sheet = ss.getSheets()[0];
