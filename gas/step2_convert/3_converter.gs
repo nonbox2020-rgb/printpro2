@@ -1,6 +1,6 @@
 // ===== 変換のしくみ（三映CSV → 勘太郎CSV）=====
 // アプリの app/sanei_converter.py と同じ動き。ルールは 2_rules.gs（RULES）にある。
-// AIは使わない。迷う値は握りつぶさず「警告」にする（警告のある案件は 3_要確認 へ）。
+// AIは使わない。迷う値は握りつぶさず「警告」にする（警告は「変換の記録」とメールで知らせる）。
 //
 // 使い方: const res = SaneiConverter.convert(三映CSVの文字列, RULES);
 //   res.plateDate … 下版予定日（例 2026/10/01）

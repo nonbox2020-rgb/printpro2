@@ -138,20 +138,22 @@ let mails = run();
 check(JSON.stringify(namesIn(P, "1_受信", "2026-09-30")) === JSON.stringify(
   ["0900_sample_A_2026-10-01.csv", "0900_sample_B_2026-12-30.csv", "0900_sample_C_extra_column.csv"]),
 "1_受信/2026-09-30 に三映CSVが3つ（受け取った時刻つき・PDFは入れない）");
-check(JSON.stringify(namesIn(P, "2_勘太郎用", "2026-10-01")) === JSON.stringify(expectedNames("sample_A_2026-10-01")),
-  "2_勘太郎用/2026-10-01 に sample A の5案件");
-check(JSON.stringify(namesIn(P, "2_勘太郎用", "2026-12-30")) === JSON.stringify(expectedNames("sample_B_2026-12-30")),
-  "2_勘太郎用/2026-12-30 に sample B の2案件（下版予定日ごとのフォルダ）");
-const sameBytes = expectedNames("sample_A_2026-10-01").every((n) => {
-  const f = files.find((x) => x.parent === folderAt(P, "2_勘太郎用", "2026-10-01") && x.getName() === n);
+const out = () => namesIn(P, "2_勘太郎用");
+const a = expectedNames("sample_A_2026-10-01"), b = expectedNames("sample_B_2026-12-30");
+const c2 = expectedNames("sample_C_extra_column").map((n) => n.replace(/\.csv$/, "_2.csv"));
+check(JSON.stringify(out()) === JSON.stringify(a.concat(b, c2).sort()),
+  "2_勘太郎用（日付で分けない）に A の5・B の2・C の5（A と同じ名前なので _2 付き）");
+const sameBytes = a.every((n) => {
+  const f = files.find((x) => x.parent === folderAt(P, "2_勘太郎用") && x.getName() === n);
   return f.blob.bytes.equals(fs.readFileSync(path.join(EXPECTED, "sample_A_2026-10-01", n)));
 });
 check(sameBytes, "保存した勘太郎CSVは、アプリの正解と1バイトも違わない（BOM付きUTF-8）");
-check(namesIn(P, "3_要確認", "2026-10-01").length === 5, "sample C（A と同じ中身）は二重なので 3_要確認 へ（勘太郎用には出さない）");
+check(!folderAt(P, "3_要確認"), "要確認のフォルダは作らない（同じ受注№も基幹システムへ）");
 check(files.filter((f) => f.parent === myDrive && !f.trashed).length === 0, "マイドライブの直下にはファイルを置かない（すべて「三映CSV連携」の中）");
 check(files.find((f) => f.getName() === "変換の記録").parent === folderAt(P), "「変換の記録」スプレッドシートも「三映CSV連携」の中");
 check(logRows().length === 1 + 14, "変換の記録: 見出し＋14行（案件12・お知らせ2）");
-check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 7件・要確認 5件", "メールの件名: " + (mails[0] || {}).subject);
+check(logRows().some((r) => r[5] === "20261001_9000101-00-00_本番_2.csv"), "変換の記録に、保存したファイルの名前（_2 付き）");
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 12件", "メールの件名: " + (mails[0] || {}).subject);
 check(t1.labels.includes("sanei-saved"), "メールのスレッドに目印のラベル");
 
 console.log("== 2回目: 新しいメールなし");
@@ -160,30 +162,23 @@ check(run().length === 0, "何も無ければ、メールも送らない");
 console.log("== 3回目: 同じスレッドに2通目（sample D・変換表に無い寸法）");
 mail(t1, new Date("2026-09-30T01:00:00Z"), [sample("sample_D_unknown_size.csv")]);
 mails = run();
-check(JSON.stringify(namesIn(P, "3_要確認", "2026-10-02")) === JSON.stringify(expectedNames("sample_D_unknown_size")),
-  "警告のある案件は 3_要確認/2026-10-02 へ");
-check(namesIn(P, "2_勘太郎用", "2026-10-02").length === 0, "警告のある案件は勘太郎用に出さない");
-check(mails.length === 1 && /要確認 1件/.test(mails[0].subject) && /寸法推定/.test(mails[0].body), "メールで要確認と警告の中身を知らせる");
+const dName = expectedNames("sample_D_unknown_size")[0];
+const dFile = () => files.filter((x) => x.parent === folderAt(P, "2_勘太郎用") && x.getName().startsWith(dName.slice(0, -4)));
+check(dFile().length === 1 && dFile()[0].blob.bytes.equals(fs.readFileSync(path.join(EXPECTED, "sample_D_unknown_size", dName))),
+  "警告のある案件も 2_勘太郎用 へ（推定の値のまま。正解と同じ）");
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 1件・確認 1件" && /寸法推定/.test(mails[0].body) &&
+  /勘太郎に入ったあとで確認/.test(mails[0].body), "メールで「確認 1件」と警告の中身を知らせる: " + (mails[0] || {}).subject);
 
-console.log("== 4回目: ルールを直して（変換表に 4/6四裁 を足す）、もう一度変換");
+console.log("== 4回目: ルールを直して（変換表に 4/6四裁 を足す）、sample D をもう一度送る");
 vm.runInContext("RULES.size_table['4/6四裁'] = { paper: '46判', print: '46四' };", sandbox);
-const d = files.find((f) => f.getName() === "1000_sample_D_unknown_size.csv");
-d.moveTo(folderAt(P, "4_もう一度変換"));
+mail(t1, new Date("2026-09-30T01:30:00Z"), [sample("sample_D_unknown_size.csv")]);
 mails = run();
-check(namesIn(P, "2_勘太郎用", "2026-10-02").length === 1, "直したあとは 2_勘太郎用/2026-10-02 へ");
-check(namesIn(P, "3_要確認", "2026-10-02").length === 0, "古い要確認のファイルは消える（ゴミ箱へ）");
-check(d.parent.parent === folderAt(P, "1_受信") && namesIn(P, "4_もう一度変換").length === 0, "変換し直した三映CSVは 1_受信 へ戻る");
-check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 1件", "メールの件名: " + (mails[0] || {}).subject);
+const fixed = files.find((x) => x.parent === folderAt(P, "2_勘太郎用") && x.getName() === dName.replace(/\.csv$/, "_2.csv"));
+const text = fixed ? fixed.blob.bytes.toString("utf8") : "";
+check(fixed && text.includes(",46判,") && text.includes(",46四,") && !text.includes("46四判"), "直したルールで変換（用紙サイズ 46判・印刷サイズ 46四。名前は _2）");
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 1件", "警告が消え、件名から「確認」が消える: " + (mails[0] || {}).subject);
 
-console.log("== 5回目: 勘太郎用に出したもの（sample A）を、もう一度変換に入れる");
-const a = files.find((f) => f.getName() === "0900_sample_A_2026-10-01.csv");
-a.moveTo(folderAt(P, "4_もう一度変換"));
-const before = files.length;
-mails = run();
-check(files.length === before, "勘太郎用にある案件は出し直さない（二重登録を防ぐ）");
-check(mails.length === 1 && /とばした 5件/.test(mails[0].body), "メールで「とばした 5件」と知らせる");
-
-console.log("== 6回目: 三映CSVでない CSV が届いた");
+console.log("== 5回目: 三映CSVでない CSV が届いた");
 const t2 = newThread();
 mail(t2, new Date("2026-09-30T02:00:00Z"), [new Blob(Buffer.from("日付,金額\r\n2026/10/01,1000\r\n", "utf8"), "report.csv", "text/csv")]);
 mails = run();
@@ -198,10 +193,7 @@ vm.runInContext("resetPractice()", sandbox);
 check(!("done" in props), "保存済みメールの記録が消える");
 mails = run();
 check(folderAt(P) && folderAt(P) !== oldRoot, "ゴミ箱のフォルダは使わず、新しい「三映CSV連携」を作る");
-check(namesIn(P, "2_勘太郎用", "2026-10-01").length === 5 && namesIn(P, "2_勘太郎用", "2026-12-30").length === 2 &&
-  namesIn(P, "2_勘太郎用", "2026-10-02").length === 1 && namesIn(P, "3_要確認", "2026-10-01").length === 5 &&
-  namesIn(P, "3_要確認", "2026-10-02").length === 0,
-"新しいフォルダで最初から変換し直す（A・B・D は勘太郎用。D は直したルールで。C は二重で要確認）");
+check(out().length === 12 + 2, "新しいフォルダで最初から変換し直す（A・B・C の12件と D の2通分）");
 
 if (failed) {
   console.log(`❌ ${failed} 件が期待と違います`);

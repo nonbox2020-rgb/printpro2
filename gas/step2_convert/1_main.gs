@@ -3,23 +3,22 @@
 // 5分おきのトリガーで saveSaneiCsv を動かす（第1回で作ったトリガーがそのまま使える）。
 //
 // ドライブの中（すべて「三映CSV連携」フォルダの中にまとめる）:
-//   1_受信/2026-09-30/       Gmail に届いた三映CSV（元のまま）。受け取った日ごと
-//   2_勘太郎用/2026-10-01/   変換できた勘太郎CSV（35列・1案件1ファイル）。下版予定日ごと
-//   3_要確認/2026-10-02/     警告があった案件。勘太郎へは出さない。人が確かめる
-//   4_もう一度変換/           ルールを直したあと、三映CSVをここへ入れると変換し直す
-//   変換の記録               スプレッドシート。いつ・どのCSVの・どの案件を・どこへ
+//   1_受信/2026-09-30/   Gmail に届いた三映CSV（元のまま）。受け取った日ごと
+//   2_勘太郎用/          変換した勘太郎CSV（35列・1案件1ファイル）。勘太郎のパソコンの移し係が、ここから指定フォルダへ移す
+//   変換の記録           スプレッドシート。いつ・どのCSVの・どの案件を・どのファイルにしたか
+//
+// 同じ受注№のCSVが届いても、そのまま勘太郎用に入れる（基幹システムはそのまま読み、あとで作業員が確かめて直す）。
+// 名前が同じときは、最後に _2、_3 … を付ける。警告のある案件も入れて、記録とメールで「確認する案件」として知らせる。
 
 const PARENT_NAME = '三映CSV連携';
 const LABEL_NAME = 'sanei-saved';                              // 保存したメールに付ける目印
 const SEARCH = 'has:attachment filename:csv newer_than:7d';    // 本番では from:（三映様のアドレス） を足す
-const GROUP_BY_DATE = true;   // 勘太郎のパソコンへ同期するときは false（日付のフォルダを作らない）
 
 function saveSaneiCsv() {
   const root = childFolder_(DriveApp.getRootFolder(), PARENT_NAME);
   const log = openLog_(root);
   const results = [];
 
-  // ① Gmail に届いた新しい三映CSVを「1_受信」に保存して、変換する
   const label = GmailApp.getUserLabelByName(LABEL_NAME) || GmailApp.createLabel(LABEL_NAME);
   const props = PropertiesService.getScriptProperties();
   const done = JSON.parse(props.getProperty('done') || '[]');   // 保存し終わったメールのID
@@ -30,7 +29,7 @@ function saveSaneiCsv() {
         if (!/\.csv$/i.test(att.getName())) return;            // CSV だけ
         const inbox = childFolder_(childFolder_(root, '1_受信'), day_(msg.getDate()));
         const file = inbox.createFile(att.copyBlob().setName(time_(msg.getDate()) + '_' + att.getName()));
-        results.push(convertFile_(root, file, false, log));
+        results.push(convertFile_(root, file, log));
       });
       done.push(msg.getId());
     });
@@ -38,24 +37,12 @@ function saveSaneiCsv() {
   });
   props.setProperty('done', JSON.stringify(done.slice(-300)));  // 最近の300通だけ覚える
 
-  // ② 「4_もう一度変換」に入れられた三映CSVを変換し直し、「1_受信」へ戻す
-  const again = [];
-  const files = childFolder_(root, '4_もう一度変換').getFiles();
-  while (files.hasNext()) {
-    const file = files.next();
-    if (!file.isTrashed()) again.push(file);
-  }
-  again.forEach(file => {
-    results.push(convertFile_(root, file, true, log));
-    file.moveTo(childFolder_(childFolder_(root, '1_受信'), day_(new Date())));
-  });
-
   if (results.length) notify_(root, results);
 }
 
-// 1つの三映CSVを変換し、案件ごとに「2_勘太郎用」か「3_要確認」へ保存する
-function convertFile_(root, file, isAgain, log) {
-  const r = { source: file.getName(), ok: 0, check: 0, skipped: 0, notes: [], error: '' };
+// 1つの三映CSVを変換し、案件ごとに「2_勘太郎用」へ保存する
+function convertFile_(root, file, log) {
+  const r = { source: file.getName(), saved: 0, check: 0, notes: [], error: '' };
   let res;
   try {
     res = SaneiConverter.convert(readCsv_(file.getBlob()), RULES);
@@ -68,23 +55,14 @@ function convertFile_(root, file, isAgain, log) {
     r.notes.push(w);
     log.appendRow([now_(), r.source, '', '', '', 'お知らせ', w]);
   });
+  const outDir = childFolder_(root, '2_勘太郎用');
   res.cases.forEach(c => {
-    const okDir = outFolder_(root, '2_勘太郎用', res.plateDate);
-    const checkDir = outFolder_(root, '3_要確認', res.plateDate);
-    const warnings = c.warnings.slice();
-    const already = hasFile_(okDir, c.fileName);
-    if (already && isAgain) {   // 変換し直し: 勘太郎用にあるものは出し直さない（勘太郎への二重登録を防ぐ）
-      r.skipped++;
-      log.appendRow([now_(), r.source, c.orderNo, c.section, c.rowCount, 'とばした（2_勘太郎用にあり）', '']);
-      return;
-    }
-    if (already) warnings.push('[二重] 同じ名前のCSVがすでに「2_勘太郎用」にあります（同じ三映CSVが2回届いた可能性）');
-    removeSame_(checkDir, c.fileName);   // 前の要確認の分は、新しい結果で置きかえる
-    (warnings.length ? checkDir : okDir).createFile(csvBlob_(c));
-    if (warnings.length) r.check++; else r.ok++;
-    warnings.forEach(w => r.notes.push(c.orderNo + ' ' + w));
-    log.appendRow([now_(), r.source, c.orderNo, c.section, c.rowCount,
-      warnings.length ? '3_要確認' : '2_勘太郎用', warnings.join('\n')]);
+    const name = uniqueName_(outDir, c.fileName);
+    outDir.createFile(csvBlob_(c.csv, name));
+    r.saved++;
+    if (c.warnings.length) r.check++;
+    c.warnings.forEach(w => r.notes.push(name + ' ' + w));
+    log.appendRow([now_(), r.source, c.orderNo, c.section, c.rowCount, name, c.warnings.join('\n')]);
   });
   return r;
 }
@@ -99,16 +77,18 @@ function readCsv_(blob) {
 }
 
 // 勘太郎CSVのファイル（UTF-8・BOM付き）
-function csvBlob_(c) {
-  return Utilities.newBlob('').setDataFromString((RULES.output.bom ? '﻿' : '') + c.csv, 'UTF-8')
-    .setContentType('text/csv').setName(c.fileName);
+function csvBlob_(csv, name) {
+  return Utilities.newBlob('').setDataFromString((RULES.output.bom ? '﻿' : '') + csv, 'UTF-8')
+    .setContentType('text/csv').setName(name);
 }
 
-// 「2_勘太郎用」「3_要確認」の中の、下版予定日のフォルダ
-function outFolder_(root, name, plateDate) {
-  const dir = childFolder_(root, name);
-  if (!GROUP_BY_DATE) return dir;
-  return childFolder_(dir, plateDate ? plateDate.split('/').join('-') : '下版予定日なし');
+// 同じ名前があれば _2、_3 … を付けた名前
+function uniqueName_(folder, name) {
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
+  let candidate = name;
+  for (let n = 2; hasFile_(folder, candidate); n++) candidate = stem + '_' + n + ext;
+  return candidate;
 }
 
 // フォルダの中のフォルダ（無ければ作る）。ゴミ箱に入れたフォルダは使わない
@@ -130,14 +110,6 @@ function hasFile_(folder, name) {
   return false;
 }
 
-function removeSame_(folder, name) {
-  const found = folder.getFilesByName(name);
-  while (found.hasNext()) {
-    const file = found.next();
-    if (!file.isTrashed()) file.setTrashed(true);
-  }
-}
-
 // 「変換の記録」スプレッドシート（無ければ作る）
 function openLog_(root) {
   const found = root.getFilesByName('変換の記録');
@@ -148,30 +120,25 @@ function openLog_(root) {
   const ss = SpreadsheetApp.create('変換の記録');
   DriveApp.getFileById(ss.getId()).moveTo(root);
   const sheet = ss.getSheets()[0];
-  sheet.appendRow(['日時', '三映CSV', '受注№', '区分', '行数', '結果', '警告・お知らせ']);
+  sheet.appendRow(['日時', '三映CSV', '受注№', '区分', '行数', '保存したファイル', '警告・お知らせ']);
   sheet.setFrozenRows(1);
   return sheet;
 }
 
-// 自分にメールで知らせる（要確認・エラーがあれば件名に出す）
+// 自分にメールで知らせる（確認する案件・エラーがあれば件名に出す）
 function notify_(root, results) {
   const total = key => results.reduce((n, r) => n + r[key], 0);
   const errors = results.filter(r => r.error).length;
-  let subject = '【三映CSV】勘太郎用 ' + total('ok') + '件';
-  if (total('check')) subject += '・要確認 ' + total('check') + '件';
+  let subject = '【三映CSV】勘太郎用 ' + total('saved') + '件';
+  if (total('check')) subject += '・確認 ' + total('check') + '件';
   if (errors) subject += '・エラー ' + errors + '件';
   const lines = [];
   results.forEach(r => {
     lines.push('■ ' + r.source);
-    if (r.error) {
-      lines.push('  エラー（変換できない）: ' + r.error);
-    } else {
-      lines.push('  勘太郎用 ' + r.ok + '件・要確認 ' + r.check + '件' +
-        (r.skipped ? '・とばした ' + r.skipped + '件（2_勘太郎用にあり）' : ''));
-    }
+    lines.push(r.error ? '  エラー（変換できない）: ' + r.error : '  勘太郎用に ' + r.saved + '件');
     r.notes.forEach(n => lines.push('  ・' + n));
   });
-  lines.push('', 'フォルダ: ' + root.getUrl());
+  lines.push('', '警告のある案件は、勘太郎に入ったあとで確認して直してください。', 'フォルダ: ' + root.getUrl());
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(), subject, lines.join('\n'));
 }
 
@@ -180,7 +147,7 @@ function time_(date) { return Utilities.formatDate(date, 'Asia/Tokyo', 'HHmm'); 
 function now_() { return Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm'); }
 
 // 練習のやり直し用: 保存済みメールの記録を消す（次の実行で、7日以内のCSVつきメールをもう一度保存・変換する）。
-// きれいにやり直すときは、先にドライブの「三映CSV連携」フォルダを消してから実行する
+// きれいにやり直すときは、先にドライブの「三映CSV連携」フォルダをゴミ箱に入れてから実行する
 function resetPractice() {
   PropertiesService.getScriptProperties().deleteProperty('done');
 }
