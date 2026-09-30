@@ -118,23 +118,30 @@ function Get-UniqueName([string]$dir, [string]$name) {
 function Find-KantaroSource([string[]]$roots) {
     if (-not $roots) {
         $roots = @()
-        foreach ($d in [IO.DriveInfo]::GetDrives()) {
-            try { if ($d.IsReady) { $roots += $d.RootDirectory.FullName } } catch { }
-        }
-        if ($env:USERPROFILE) { $roots += $env:USERPROFILE }
+        if ($env:USERPROFILE) { $roots += $env:USERPROFILE }   # ミラーリング（ユーザーのフォルダの中）
+        try {
+            foreach ($d in [IO.DriveInfo]::GetDrives()) {
+                try { if ($d.IsReady) { $roots += $d.RootDirectory.FullName } } catch { }
+            }
+        } catch { }
     }
     foreach ($root in $roots) {
-        foreach ($top in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
-            $candidates = @($top.FullName)
-            if ($top.Name -eq '共有ドライブ' -or $top.Name -eq 'Shared drives') {
-                $candidates += @(Get-ChildItem -LiteralPath $top.FullName -Directory -ErrorAction SilentlyContinue |
-                    ForEach-Object { $_.FullName })
+        # 読めないドライブ（CD・切れたネットワークドライブ・権限の無いフォルダなど）はとばして、探し続ける
+        try {
+            foreach ($top in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
+                $candidates = @($top.FullName)
+                if ($top.Name -eq '共有ドライブ' -or $top.Name -eq 'Shared drives') {
+                    $candidates += @(Get-ChildItem -LiteralPath $top.FullName -Directory -ErrorAction SilentlyContinue |
+                        ForEach-Object { $_.FullName })
+                }
+                foreach ($c in $candidates) {
+                    try {
+                        $path = Join-Path (Join-Path $c $ParentName) $OutName
+                        if (Test-Path -LiteralPath $path -PathType Container) { return $path }
+                    } catch { }
+                }
             }
-            foreach ($c in $candidates) {
-                $path = Join-Path (Join-Path $c $ParentName) $OutName
-                if (Test-Path -LiteralPath $path -PathType Container) { return $path }
-            }
-        }
+        } catch { }
     }
     return $null
 }

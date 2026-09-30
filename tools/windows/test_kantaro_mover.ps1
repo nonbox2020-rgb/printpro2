@@ -50,6 +50,7 @@ try {
     Set-Config $dest ''
     Put-Csv $src 3
     $r = Run-Mover @('-Check')
+    if ($r.Code -ne 0) { Write-Host $r.Out }   # うまくいかなかったときは、移し係の表示をそのまま出す
     Check ($r.Code -eq 0) '終了コード 0'
     Check ($r.Out -match [regex]::Escape("Googleドライブ: $src")) 'ユーザーのフォルダの「マイドライブ」の中から「2_勘太郎用」を見つける'
     Check ($r.Out -match '書き込めます') '勘太郎のフォルダに書き込めることを確かめる'
