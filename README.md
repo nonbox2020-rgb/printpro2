@@ -145,12 +145,31 @@ Google Apps Script（GAS）だけで動く版です。Google Workspace の中で
 - 祝日は GAS の中で計算する（振替休日・国民の休日を含む。2022〜2060年の全日で `jpholiday` と一致を確認）
 - 二度保存しない: 保存したメールの ID を1通ずつ覚える（Gmail は同じ件名のメールを1つのスレッドにまとめるため、スレッド単位で覚えると2通目を取りこぼす）
 - 本番で使う前に: `SEARCH` に `from:（三映様のアドレス）` を足す
-- 勘太郎のパソコンへ渡す（予定）: パソコン版 Google ドライブで「2_勘太郎用」を同期し、「移し係」（タスクスケジューラで5分おきに動く PowerShell）がデスクトップの指定フォルダへ移す。勘太郎側の設定は変えない。移し係はまだこのリポジトリに無い（未検証）
+- 勘太郎のフォルダへ渡す: 下の「移し係（Windows）」。勘太郎側の設定は変えない
 - 練習のやり直し: `resetPractice` を実行（保存済みメールの記録を消す）。きれいにやり直すときは、先に「三映CSV連携」フォルダをゴミ箱に入れる
 - 確かめ方（Gmail・ドライブの偽物の上で動かす。GAS を直した後にも実行する）:
   - `node gas/step2_convert/test_converter.js` … 架空サンプルA〜Lの変換結果が、アプリの正解CSV（`tests/expected`）と1バイトも違わないか
   - `node gas/step2_convert/test_main.js` … 保存・変換・同じ名前の `_2`・警告とエラーの知らせ・ルールを直したあと・やり直し・通知メール
   - `node gas/step1_save/test_save_sanei_csv.js` … 第1回の見本
+
+## 移し係（Windows）：Googleドライブの勘太郎CSVを、勘太郎のフォルダへ移す
+
+勘太郎のパソコン（古い Windows Server）にはパソコン版 Google ドライブを入れられないため、同じ社内ネットワークの別の Windows パソコン（Windows 10/11）が中継します。
+
+```
+GAS → Googleドライブ「三映CSV連携/2_勘太郎用」
+        ↓ パソコン版Googleドライブ（中継の Windows パソコン）
+      移し係（5分おき）→ 勘太郎の共有フォルダ（例 \\192.168.0.223\csv）→ 勘太郎が読む
+      渡し終えたものは「三映CSV連携/3_渡し済み」へ
+```
+
+- 入れ方: 中継パソコンで、毎日使う人の名前でログインし、パソコン版 Google ドライブに GAS を動かしている Google アカウントでログインしておく。
+  勘太郎の共有フォルダをエクスプローラーで一度開いて「資格情報を記憶する」。そのあと `tools/windows/` の3つのファイル（`setup_kantaro_mover.bat`・`setup_kantaro_mover.ps1`・`kantaro_mover.ps1`）を同じフォルダに置き、`setup_kantaro_mover.bat` をダブルクリック（管理者でなくてよい）
+- 聞くのは2つ: 勘太郎のフォルダ（Enter で `\\192.168.0.223\csv`。テスト用に手元のフォルダも指定できる）と、「2_勘太郎用」にすでにあるCSV（研修のダミーデータなど）を渡すかどうか（渡さないものは「4_渡さなかった分」へよける）
+- `ユーザーのフォルダ\kantaro-mover\` に移し係・設定（`config.json`）・記録（`mover.log`）を置き、タスクスケジューラに `kantaro-mover` を登録する（その人がログオンしている間、5分おき。画面は出ない）
+- 渡し方: 勘太郎のフォルダへ「.名前.tmp」でコピー → 大きさを確かめる → 本当の名前に変える（書きかけを読ませない）。同じ名前があれば `_2`、`_3` … を付ける（上書きしない）
+- 勘太郎のフォルダやドライブが見つからないときは何も動かさず、次の回にやり直す。15分以上続いたら画面の右下で1回だけ知らせる
+- 確かめ方: `pwsh -NoProfile -File tools/windows/test_kantaro_mover.ps1`（偽物のフォルダ・タスクスケジューラの上で動かす）
 
 ## ファイル構成
 
@@ -170,7 +189,8 @@ printpro2/
 │   ├── kantaro_agent.ps1                # 勘太郎パソコンの受け取り係（Windows PowerShell）
 │   ├── setup_kantaro_agent.bat          # 受け取り係のかんたん設定（ダブルクリック）
 │   ├── kantaro_agent_installer.ps1      # かんたん設定の本体（URL・合言葉・フォルダを聞いて登録）
-│   └── kantaro_agent.config.sample.json # 受け取り係の設定の見本（手で設定する場合）
+│   ├── kantaro_agent.config.sample.json # 受け取り係の設定の見本（手で設定する場合）
+│   └── windows/                         # 移し係: Googleドライブの勘太郎CSVを勘太郎のフォルダへ（かんたん設定＋確認）
 ├── gas/
 │   ├── step1_save/              # GAS 第1回: Gmail の三映CSVを Googleドライブへ保存するだけ（＋確認）
 │   └── step2_convert/           # GAS 第2・3回: 保存して勘太郎CSVに変換（1_main・2_rules・3_converter ＋確認）
