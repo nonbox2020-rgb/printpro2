@@ -4,7 +4,7 @@ __pycache__/
 .venv/
 venv/
 
-# アプリが生成するデータ（発注書・台帳・出力CSVは顧客情報を含むためコミットしない）
+# アプリが生成するデータ（三映CSV・出力CSVは顧客情報を含むためコミットしない）
 data/
 app.log
 
@@ -16,3 +16,8 @@ app.log
 # OS
 .DS_Store
 Thumbs.db
+
+# 受け取り係の設定(合言葉を含む)とログ
+tools/kantaro_agent.config.json
+tools/kantaro_agent.log
+tools/kantaro_agent.delivered.txt

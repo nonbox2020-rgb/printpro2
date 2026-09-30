@@ -3,6 +3,7 @@
   python tests/test_sanei_converter.py    # 依存: pyyaml のみ
 """
 import csv
+import datetime as _dt
 import io
 import os
 import sys
@@ -110,6 +111,18 @@ def run():
         raise AssertionError("寸法の列が無いのにエラーにならない")
     except ValueError as e:
         assert "寸法" in str(e), e
+
+    # 納品日: 国民の祝日は年をまたいでも自動で除外(元日)。会社休業日は設定で足す
+    assert conv._add_business_days(_dt.date(2026, 12, 30), 2) == _dt.date(2027, 1, 4)
+    cfg3 = yaml.safe_load(yaml.safe_dump(CFG))
+    cfg3["delivery"]["company_closed"] = ["2026/12/31", "2027-01-04"]
+    assert SaneiConverter(cfg3)._add_business_days(_dt.date(2026, 12, 30), 2) == _dt.date(2027, 1, 6)
+    cfg3["delivery"]["company_closed"] = ["12/31"]  # 年が無い書き間違いは起動時に止める
+    try:
+        SaneiConverter(cfg3)
+        raise AssertionError("company_closed の書き間違いがエラーにならない")
+    except ValueError as e:
+        assert "company_closed" in str(e), e
 
     # encoding を utf-8-sig にしても BOM は二重にならない
     cfg2 = yaml.safe_load(yaml.safe_dump(CFG))

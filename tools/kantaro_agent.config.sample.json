@@ -1,0 +1,6 @@
+{
+  "app_url": "https://（あなたのアプリ）.onrender.com",
+  "token": "（Render の環境変数 AGENT_TOKEN と同じ文字列）",
+  "dest_folder": "C:\\（勘太郎の指定フォルダ）",
+  "write_done": false
+}

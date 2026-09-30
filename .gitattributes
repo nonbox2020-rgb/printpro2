@@ -1,0 +1,6 @@
+# テスト用CSVは1バイトずつ比べるため、改行コードなどを自動変換しない
+tests/samples/** -text
+tests/expected/** -text
+tools/kantaro_agent.ps1 -text
+tools/kantaro_agent_installer.ps1 -text
+tools/setup_kantaro_agent.bat -text

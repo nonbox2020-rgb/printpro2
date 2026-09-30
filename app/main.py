@@ -6,7 +6,9 @@
      (AIは使わない。ルールは sanei_config.yaml)
   3. 画面で人が確認・修正(1案件=1ファイル単位。判断に迷う箇所は警告を表示)
   4. 確定 → 案件ごとにCSV-B生成 → アトミック書込 → .done 作成
-  5. 設定によりSFTPで印刷勘太郎サーバーへ自動送信(鍵認証/パスワード認証)
+  5. 勘太郎のパソコンの受け取り係(tools/kantaro_agent.ps1)が数分おきに受け取り、
+     指定フォルダへ入れる → 取込済へ移る。手で入れる場合は画面からダウンロード
+     (SFTPで送る機能もあるが今は使わない。config.yaml の sftp.push_enabled)
 
 設定ファイルの役割:
   sanei_config.yaml ... 変換ルール・CSV-Bの35列定義・文字コード/囲み/改行・ファイル名
@@ -15,8 +17,10 @@
 必要な環境変数:
   APP_USERNAME / APP_PASSWORD ... ログインID/パスワード
   SECRET_KEY ... セッション署名用のランダム文字列
+  AGENT_TOKEN ... 勘太郎パソコンの受け取り係の合言葉(長いランダム文字列。未設定なら受け取り機能は無効)
   SFTP_PASSWORD ... SFTPをパスワード認証で使う場合のみ
 """
+import hashlib
 import logging
 import os
 import re
@@ -58,11 +62,33 @@ SECTIONS = ("本番", "校正")
 
 PUBLIC_PATHS = {"/login.html", "/api/login"}
 
+# 勘太郎パソコンの受け取り係(tools/kantaro_agent.ps1)が最後に来た時刻。画面で「動いているか」を見るため
+AGENT_LAST_SEEN = {"at": ""}
+
+
+def _same(a: str, b: str) -> bool:
+    """文字列を時間差の出ない方法で比べる(日本語が混じっても例外にしない)。"""
+    return secrets.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+def _agent_ok(request: Request) -> bool:
+    """受け取り係の合言葉(環境変数 AGENT_TOKEN)が合っているか。未設定なら常に不可。"""
+    token = os.environ.get("AGENT_TOKEN", "")
+    return bool(token) and _same(request.headers.get("authorization", ""), f"Bearer {token}")
+
 
 @app.middleware("http")
 async def auth_guard(request: Request, call_next):
-    """ログイン必須ガード。未ログインなら画面はログインページへ、APIは401を返す。"""
+    """ログイン必須ガード。未ログインなら画面はログインページへ、APIは401を返す。
+
+    /api/agent/ だけは、ログインの代わりに受け取り係の合言葉で通す。
+    """
     path = request.url.path
+    if path.startswith("/api/agent/"):
+        if not _agent_ok(request):
+            return JSONResponse({"detail": "受け取り係の合言葉が違います"}, status_code=401)
+        AGENT_LAST_SEEN["at"] = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+        return await call_next(request)
     if path in PUBLIC_PATHS or request.session.get("user"):
         return await call_next(request)
     if path.startswith("/api/"):
@@ -89,8 +115,8 @@ def login(req: LoginRequest, request: Request):
     if not expect_user or not expect_pass:
         raise HTTPException(status_code=500,
                             detail="サーバーに APP_USERNAME / APP_PASSWORD が設定されていません")
-    ok = secrets.compare_digest(req.username, expect_user) and \
-         secrets.compare_digest(req.password, expect_pass)
+    # 日本語入力のまま打った全角文字でも 500 にならないよう、バイト列で比べる
+    ok = _same(req.username, expect_user) and _same(req.password, expect_pass)
     if not ok:
         log.warning("ログイン失敗: user=%s", req.username)
         raise HTTPException(status_code=401, detail="IDまたはパスワードが違います")
@@ -114,6 +140,7 @@ def get_config(request: Request):
         "columns": SANEI["csv_b_columns"],
         "output": CONFIG["output"],
         "sftp_push": CONFIG["sftp"]["push_enabled"],
+        "agent": bool(os.environ.get("AGENT_TOKEN")),
         "user": request.session.get("user", ""),
     }
 
@@ -312,17 +339,69 @@ def list_files():
                               "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y/%m/%d %H:%M:%S"),
                               "done": (p.parent / (p.name + CONFIG["output"]["done_suffix"])).exists()})
         result[label] = files
+    result["agent"] = {"enabled": bool(os.environ.get("AGENT_TOKEN")),
+                       "last_seen": AGENT_LAST_SEEN["at"]}
     return result
 
 
-@app.get("/api/download/{filename}")
-def download(filename: str):
+def _incoming_file(filename: str) -> Path:
+    """未取込フォルダ内のファイル。フォルダの外を指す名前は受け付けない。"""
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="不正なファイル名です")
     p = BASE_DIR / CONFIG["output"]["dir"] / filename
     if not p.exists():
         raise HTTPException(status_code=404, detail="ファイルが見つかりません")
-    return FileResponse(p, filename=filename, media_type="text/csv")
+    return p
+
+
+@app.get("/api/download/{filename}")
+def download(filename: str):
+    return FileResponse(_incoming_file(filename), filename=filename, media_type="text/csv")
+
+
+# ---------------- 勘太郎パソコンの受け取り係(自動) ----------------
+# 勘太郎の指定フォルダは、変換する人とは別のパソコンにある。そのパソコンで動く
+# tools/kantaro_agent.ps1 が数分おきに来て、未取込のCSVを受け取り、指定フォルダへ入れてから
+# 「受け取った」と知らせる → そのCSVは取込済(archive)へ移る。合言葉は環境変数 AGENT_TOKEN。
+
+@app.get("/api/agent/files")
+def agent_files():
+    """未取込のCSV(古い順)。
+
+    sha256 … 受け取ったファイルが壊れていないか確かめるため
+    id     … 出力1回ごとに違う値(書き込み時刻)。同じ中身をもう一度出力した場合も
+             「新しいファイル」として届けるため、受け取り係は name+id+sha256 で控える
+    """
+    d = BASE_DIR / CONFIG["output"]["dir"]
+    files = []
+    if d.exists():
+        for p in sorted(d.glob("*.csv"), key=lambda x: x.stat().st_mtime):
+            data = p.read_bytes()
+            files.append({"name": p.name, "size": len(data), "id": str(p.stat().st_mtime_ns),
+                          "sha256": hashlib.sha256(data).hexdigest()})
+    # charset を明示しないと、Windows PowerShell 5.1 が日本語のファイル名を化かして読む
+    return JSONResponse({"files": files}, media_type="application/json; charset=utf-8")
+
+
+@app.get("/api/agent/files/{filename}")
+def agent_download(filename: str):
+    return FileResponse(_incoming_file(filename), filename=filename, media_type="text/csv")
+
+
+@app.post("/api/agent/files/{filename}/taken")
+def agent_taken(filename: str):
+    """受け取り済みの印として、CSV(と .done)を取込済フォルダへ移す。"""
+    src = _incoming_file(filename)
+    out_cfg = CONFIG["output"]
+    archive = BASE_DIR / out_cfg["archive_dir"]
+    archive.mkdir(parents=True, exist_ok=True)
+    name = _unique_name(str(archive), filename, set())
+    os.replace(src, archive / name)
+    done = src.with_name(src.name + out_cfg["done_suffix"])
+    if done.exists():
+        os.replace(done, archive / (name + out_cfg["done_suffix"]))
+    log.info("勘太郎パソコンが受け取り: %s", filename)
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory=str(BASE_DIR / "static"), html=True), name="static")
