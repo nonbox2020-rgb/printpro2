@@ -30,8 +30,9 @@ class Blob {
 const folders = [], files = [];
 const iter = (list) => { let i = 0; return { hasNext: () => i < list.length, next: () => list[i++] }; };
 class File {
-  constructor(blob, parent) { this.id = "f" + ++seq; this.blob = blob; this.parent = parent; this.trashed = false; }
+  constructor(blob, parent) { this.id = "f" + ++seq; this.blob = blob; this.parent = parent; this.trashed = false; this.created = new Date(); }
   getId() { return this.id; }
+  getDateCreated() { return this.created; }
   getName() { return this.blob.name; }
   getBlob() { return this.blob.copyBlob(); }
   moveTo(folder) { this.parent = folder; return this; }
@@ -40,8 +41,10 @@ class File {
 }
 // 本物のドライブと同じく、ゴミ箱に入れたものも名前で見つかる（使う側で isTrashed を確かめる）
 class Folder {
-  constructor(name, parent) { this.id = "d" + ++seq; this.name = name; this.parent = parent; this.trashed = false; }
+  constructor(name, parent) { this.id = "d" + ++seq; this.name = name; this.parent = parent; this.trashed = false; this.created = new Date(); }
   getName() { return this.name; }
+  getDateCreated() { return this.created; }
+  getFolders() { return iter(folders.filter((f) => f.parent === this)); }
   setTrashed(v) { this.trashed = v; return this; }
   isTrashed() { return this.trashed; }
   getUrl() { return "https://drive.google.com/drive/folders/" + this.id; }
@@ -64,8 +67,9 @@ function makeSpreadsheet(name) {
 }
 
 const threads = [];
-function mail(thread, date, attachments) {
-  const m = { id: "m" + ++seq, date, attachments,
+// from = 送り主、deliveredTo = 届いたアドレス（Gmail の deliveredto: で絞れる）
+function mail(thread, date, attachments, from = "sanei@sanei.example", deliveredTo = "iwasaki@yushin-p.example") {
+  const m = { id: "m" + ++seq, date, attachments, from, deliveredTo, getFrom() { return this.from; },
     getId() { return this.id; }, getDate() { return this.date; }, getAttachments() { return this.attachments; } };
   thread.messages.push(m);
 }
@@ -78,11 +82,14 @@ const sample = (n) => new Blob(fs.readFileSync(path.join(SAMPLES, n)), n, "text/
 
 const sent = [];
 const props = {};
+const triggers = [];
+const logs = [];
+let lastQuery = "";
 const labels = {};
 const jst = (d) => new Date(d.getTime() + 9 * 3600 * 1000);
 const p2 = (n) => String(n).padStart(2, "0");
 const sandbox = {
-  console,
+  console: { log: (...a) => logs.push(a.join(" ")) },
   DriveApp: {
     getRootFolder: () => myDrive,
     getFileById: (id) => files.find((f) => f.id === id),
@@ -90,17 +97,34 @@ const sandbox = {
   GmailApp: {
     getUserLabelByName: (n) => labels[n] || null,
     createLabel: (n) => (labels[n] = { name: n }),
-    // has:attachment filename:csv の代わり: CSV の添付があるスレッド
-    search: () => threads.filter((t) => t.messages.some((m) => m.attachments.some((a) => /csv/i.test(a.getName())))),
+    // has:attachment filename:csv の代わり: CSV の添付があるスレッド。from:(…) と deliveredto:… でも絞る
+    search: (q) => {
+      lastQuery = q;
+      const fromM = /from:\(([^)]*)\)/.exec(q);
+      const froms = fromM ? fromM[1].split(" OR ").map((x) => x.trim().toLowerCase()) : null;
+      const toM = /deliveredto:(\S+)/.exec(q);
+      const to = toM ? toM[1].toLowerCase() : null;
+      return threads.filter((t) => t.messages.some((m) => m.attachments.some((a) => /csv/i.test(a.getName())) &&
+        (!froms || froms.some((f) => m.from.toLowerCase().includes(f))) && (!to || m.deliveredTo.toLowerCase() === to)));
+    },
   },
   PropertiesService: {
     getScriptProperties: () => ({
+      getProperties: () => Object.assign({}, props),
       getProperty: (k) => (k in props ? props[k] : null),
       setProperty: (k, v) => { props[k] = v; },
       deleteProperty: (k) => { delete props[k]; },
     }),
   },
   SpreadsheetApp: { create: makeSpreadsheet, openById: (id) => sheets[id] },
+  ScriptApp: {
+    getProjectTriggers: () => triggers,
+    newTrigger: (fn) => ({ timeBased: () => ({ everyMinutes: (n) => ({ create: () => {
+      const t = { minutes: n, getHandlerFunction: () => fn };
+      triggers.push(t);
+      return t;
+    } }) }) }),
+  },
   MailApp: { sendEmail: (to, subject, body) => sent.push({ to, subject, body }) },
   Session: { getEffectiveUser: () => ({ getEmail: () => "iwasaki@yushin-p.example" }) },
   Utilities: {
@@ -194,6 +218,90 @@ check(!("done" in props), "保存済みメールの記録が消える");
 mails = run();
 check(folderAt(P) && folderAt(P) !== oldRoot, "ゴミ箱のフォルダは使わず、新しい「三映CSV連携」を作る");
 check(out().length === 12 + 2, "新しいフォルダで最初から変換し直す（A・B・C の12件と D の2通分）");
+
+console.log("== 設定: setup（スクリプト プロパティとトリガーを作る）");
+vm.runInContext("setup()", sandbox);
+check(props.SANEI_FROM === "未設定" && props.CHECK_ADDRESS === "未設定" && props.NOTIFY_TO === "未設定" && props.KEEP_DAYS === "3",
+  "設定の欄を作る（値は「未設定」、KEEP_DAYS は 3）");
+check(triggers.length === 1 && triggers[0].getHandlerFunction() === "saveSaneiCsv" && triggers[0].minutes === 5, "5分おきのトリガーを作る");
+props.SANEI_FROM = "sanei@sanei.example";
+vm.runInContext("setup()", sandbox);
+check(triggers.length === 1 && props.SANEI_FROM === "sanei@sanei.example", "もう一度実行しても、トリガーは増えず、変えた設定も消さない");
+
+console.log("== 設定: 三映様のアドレス（SANEI_FROM）で絞る");
+const base = out().length;
+mail(newThread(), new Date("2026-09-30T03:00:00Z"), [sample("sample_E_2026-10-09_long_weekend.csv")], "someone@other.example");
+mails = run();
+check(lastQuery.includes("from:(sanei@sanei.example)"), "Gmail の検索に from:(三映様のアドレス): " + lastQuery);
+check(out().length === base && mails.length === 0, "三映様以外から届いたCSVは使わない");
+const t4 = newThread();
+mail(t4, new Date("2026-09-30T03:10:00Z"), [sample("sample_E_2026-10-09_long_weekend.csv")], "三映 担当 <SANEI@sanei.example>");
+mails = run();
+check(out().length === base + 4 && mails.length === 1, "三映様から届いたCSVは変換する（名前つき・大文字でも）");
+check(/3日たつとゴミ箱へ/.test(mails[0].body), "知らせのメールに、3日たつとゴミ箱へ移ることを書く");
+mail(t4, new Date("2026-09-30T03:20:00Z"), [sample("sample_G_2027-04-28_golden_week.csv")], "staff@yushin-p.example");
+mails = run();
+check(out().length === base + 4 && mails.length === 0, "同じスレッドでも、三映様以外のメールのCSVは使わない");
+
+console.log("== 設定: 三映CSVが届くアドレス（CHECK_ADDRESS）で絞る");
+props.CHECK_ADDRESS = "csv@yushin-p.example";
+mail(newThread(), new Date("2026-09-30T04:00:00Z"), [sample("sample_K_2026-10-22_utf8.csv")], "sanei@sanei.example", "other@yushin-p.example");
+mails = run();
+check(lastQuery.includes("deliveredto:csv@yushin-p.example"), "Gmail の検索に deliveredto:（届くアドレス）");
+check(mails.length === 0, "ほかのアドレスに届いたメールは使わない");
+mail(newThread(), new Date("2026-09-30T04:10:00Z"), [sample("sample_K_2026-10-22_utf8.csv")], "sanei@sanei.example", "csv@yushin-p.example");
+mails = run();
+check(mails.length === 1 && out().length === base + 4 + 3, "届くアドレスに来たメールは変換する");
+
+console.log("== 設定: 結果を知らせる先（NOTIFY_TO）");
+check(mails[0].to === "iwasaki@yushin-p.example", "未設定なら、このアカウントへ知らせる");
+props.NOTIFY_TO = "a@yushin-p.example、 b@yushin-p.example";
+mail(newThread(), new Date("2026-09-30T04:20:00Z"), [sample("sample_G_2027-04-28_golden_week.csv")], "sanei@sanei.example", "csv@yushin-p.example");
+mails = run();
+check(mails.length === 1 && mails[0].to === "a@yushin-p.example,b@yushin-p.example", "設定した先（複数）へ知らせる: " + (mails[0] || {}).to);
+
+console.log("== 設定を確かめる（checkSettings）");
+const lines = vm.runInContext("checkSettings()", sandbox);
+check(lines.some((l) => l.includes("このGASが見ている Gmail: iwasaki@yushin-p.example")), "見ている Gmail を出す");
+check(lines.some((l) => l.includes("from:(sanei@sanei.example)") && l.includes("deliveredto:csv@yushin-p.example")), "Gmail の検索を出す");
+check(lines.some((l) => l.includes("件のスレッド")), "対象になるメールの数を出す");
+check(lines.some((l) => l.includes("CHECK_ADDRESS がこのアカウントと違います")), "届くアドレスがアカウントと違えば、転送を確かめるよう出す");
+
+console.log("== 3日たったCSVを消す（KEEP_DAYS）");
+const daysAgo = (n) => new Date(Date.now() - n * 24 * 3600 * 1000);
+const inboxDay = folderAt(P, "1_受信", "2026-09-30");
+const oldInbox = files.filter((f) => f.parent === inboxDay && !f.trashed);
+oldInbox.forEach((f) => { f.created = daysAgo(4); });
+inboxDay.created = daysAgo(4);
+const outFiles = files.filter((f) => f.parent === folderAt(P, "2_勘太郎用") && !f.trashed);
+outFiles.slice(0, 2).forEach((f) => { f.created = daysAgo(4); });
+const doneDir = folderAt(P).createFolder("3_渡し済み");
+const oldDone = doneDir.createFile(new Blob(Buffer.from("x"), "old.csv", "text/csv"));
+oldDone.created = daysAgo(5);
+const recent = doneDir.createFile(new Blob(Buffer.from("x"), "recent.csv", "text/csv"));
+recent.created = daysAgo(1);
+const logFile = files.find((f) => f.getName() === "変換の記録" && f.parent === folderAt(P));
+logFile.created = daysAgo(10);
+delete props.LAST_CLEANUP;
+mails = run();
+check(oldInbox.length > 0 && oldInbox.every((f) => f.trashed) && inboxDay.trashed, "1_受信: 4日前のCSVをゴミ箱へ（空になった日付のフォルダも）");
+check(outFiles.slice(0, 2).every((f) => f.trashed) && outFiles.slice(2).every((f) => !f.trashed), "2_勘太郎用: 4日前の2件だけゴミ箱へ（新しいものは残す）");
+check(oldDone.trashed && !recent.trashed, "3_渡し済み: 5日前はゴミ箱へ、1日前は残す");
+check(!logFile.trashed, "「変換の記録」スプレッドシートは消さない");
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎へ渡していないCSVを削除しました 2件" &&
+  mails[0].body.includes(outFiles[0].getName()), "勘太郎へ渡していないCSVを消したときは、名前つきでメールで知らせる: " + (mails[0] || {}).subject);
+check(logRows().some((r) => r[5] === "削除" && /1_受信/.test(r[6]) && /2_勘太郎用 2件/.test(r[6])), "変換の記録に「削除」の行（フォルダごとの件数）");
+recent.created = daysAgo(30);
+mails = run();
+check(!recent.trashed && mails.length === 0, "1時間以内には、もう一度は見ない");
+props.KEEP_DAYS = "0";
+delete props.LAST_CLEANUP;
+run();
+check(!recent.trashed, "KEEP_DAYS を 0 にすると消さない");
+props.KEEP_DAYS = "三日";
+delete props.LAST_CLEANUP;
+run();
+check(recent.trashed, "KEEP_DAYS が数字でなければ 3日として消す");
 
 if (failed) {
   console.log(`❌ ${failed} 件が期待と違います`);
