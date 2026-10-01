@@ -17,6 +17,9 @@
 //   KEEP_DAYS      ドライブに保存したCSVを残す日数（初めは 3）。過ぎたらゴミ箱へ（30日間は元に戻せる）。0 なら消さない
 //   START_DATE     この日（時刻も書ける）より前に届いたメールは読まない。初めは 2026/10/01（本番を始めた日）
 //                  例 2026/10/01 、2026/10/01 15:00（日本の時刻）。「未設定」なら日付で絞らない（7日以内を全部読む）
+//   SUBJECT_WORDS  件名にこの言葉が入っているメールだけ読む。初めは「最終予定表」（「仮予定表」は読まない）
+//                  複数はカンマ区切り（どれか1つが入っていればよい）。「未設定」なら件名で絞らない
+//                  読まなかったメールは「変換の記録」に1行残す（変換はしない・メールでは知らせない）
 //   設定を変えたら checkSettings を実行すると、どのメールが対象になるかを確かめられる。
 //   done・LAST_CLEANUP・AGENT_LAST_SEEN・PICKUP_ALERTED は GAS が使う控えなので触らない。
 //   AGENT_TOKEN は受け取り口の合言葉（4_webapp.gs の makeAgentToken で作る）。
@@ -39,6 +42,7 @@ const SETTINGS = {                                                // スクリ�
   NOTIFY_TO: UNSET,
   KEEP_DAYS: '3',
   START_DATE: '2026/10/01',   // 本番を始めた日。これより前に届いたメールは読まない（古いメールを勘太郎へ送らない）
+  SUBJECT_WORDS: '最終予定表',  // 件名にこの言葉があるメールだけ読む（「仮予定表」は読まない）
 };
 
 function saveSaneiCsv() {
@@ -69,7 +73,13 @@ function saveSaneiCsvNow_() {
     thread.getMessages().forEach(msg => {
       if (done.includes(msg.getId())) return;                    // 保存済みのメールはとばす
       if (s.start && msg.getDate() < s.start) return;            // START_DATE より前に届いたメールは読まない
-      if (fromSanei_(msg, s)) {                                  // 同じスレッドの、三映様以外のメールは使わない
+      if (fromSanei_(msg, s) && !subjectOk_(msg, s)) {           // 件名に「最終予定表」が無い（仮予定表など）は読まない
+        const csvNames = msg.getAttachments().map(att => att.getName()).filter(n => /\.csv$/i.test(n));
+        if (csvNames.length) {
+          log.appendRow([now_(), csvNames.join(' / '), '', '', '', '読まなかった',
+            '件名に「' + s.subjectWords.join('」「') + '」が無い: ' + msg.getSubject()]);
+        }
+      } else if (fromSanei_(msg, s)) {                           // 同じスレッドの、三映様以外のメールは使わない
         msg.getAttachments().forEach(att => {
           if (!/\.csv$/i.test(att.getName())) return;            // CSV だけ
           const inbox = childFolder_(childFolder_(root, '1_受信'), day_(msg.getDate()));
@@ -127,7 +137,7 @@ function settings_() {
   let keepDays = parseInt(value('KEEP_DAYS'), 10);
   if (isNaN(keepDays) || keepDays < 0) keepDays = Number(SETTINGS.KEEP_DAYS);
   return { from: list('SANEI_FROM'), check: value('CHECK_ADDRESS'), notify: list('NOTIFY_TO'), keepDays: keepDays,
-    start: startDate_(value('START_DATE')) };
+    start: startDate_(value('START_DATE')), subjectWords: list('SUBJECT_WORDS') };
 }
 
 // START_DATE（例 2026/10/01 、2026/10/01 15:00。日本の時刻）→ その時刻。空なら null（日付で絞らない）
@@ -158,6 +168,14 @@ function fromSanei_(msg, s) {
   if (!s.from.length) return true;
   const sender = String(msg.getFrom() || '').toLowerCase();
   return s.from.some(a => sender.indexOf(a.toLowerCase()) >= 0);
+}
+
+// 件名に SUBJECT_WORDS のどれかが入っているか。全角/半角と空白のちがいは気にしない。未設定なら絞らない
+function subjectOk_(msg, s) {
+  if (!s.subjectWords.length) return true;
+  const norm = t => String(t || '').normalize('NFKC').replace(/\s/g, '');
+  const subject = norm(msg.getSubject());
+  return s.subjectWords.some(w => subject.indexOf(norm(w)) >= 0);
 }
 
 function notifyTo_(s) {
@@ -192,8 +210,11 @@ function checkSettings() {
     'CSVを残す日数（KEEP_DAYS）: ' + (s.keepDays ? s.keepDays + '日（過ぎたらゴミ箱へ）' : '0（消さない）'),
     'これより前に届いたメールは読まない（START_DATE）: ' +
       (s.start ? Utilities.formatDate(s.start, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm') : '未設定（日付で絞らない。7日以内を全部読む）'),
+    '件名にこの言葉があるメールだけ読む（SUBJECT_WORDS）: ' + (s.subjectWords.join(', ') || '未設定（件名で絞らない）'),
     'Gmail の検索: ' + q,
     'いま対象になるメール（7日以内・START_DATE 以降・CSV つき）: ' + threads.length + ' 件のスレッド',
+    'そのうち件名に言葉が入っているメール: ' + threads.reduce((n, t) => n + t.getMessages()
+      .filter(m => (!s.start || m.getDate() >= s.start) && fromSanei_(m, s) && subjectOk_(m, s)).length, 0) + ' 通',
     '5分おきのトリガー: ' + (hasTrigger ? 'あり' : 'なし（setup を実行してください）'),
   ];
   if (s.check && s.check.toLowerCase() !== String(me).toLowerCase()) {

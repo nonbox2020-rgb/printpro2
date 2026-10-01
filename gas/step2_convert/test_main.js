@@ -72,8 +72,10 @@ function makeSpreadsheet(name) {
 
 const threads = [];
 // from = 送り主、deliveredTo = 届いたアドレス（Gmail の deliveredto: で絞れる）
-function mail(thread, date, attachments, from = "sanei@sanei.example", deliveredTo = "iwasaki@yushin-p.example") {
-  const m = { id: "m" + ++seq, date, attachments, from, deliveredTo, getFrom() { return this.from; },
+function mail(thread, date, attachments, from = "sanei@sanei.example", deliveredTo = "iwasaki@yushin-p.example",
+  subject = "【三映】雄進印刷様 最終予定表") {
+  const m = { id: "m" + ++seq, date, attachments, from, deliveredTo, subject, getFrom() { return this.from; },
+    getSubject() { return this.subject; },
     getId() { return this.id; }, getDate() { return this.date; }, getAttachments() { return this.attachments; } };
   thread.messages.push(m);
 }
@@ -405,6 +407,38 @@ check(/START_DATE が読めません/.test(badDate), "無い日付（2/30）も�
 props.START_DATE = "2026/10/01";
 check(vm.runInContext("checkSettings()", sandbox).some((l) => l.includes("START_DATE") && l.includes("2026/10/01 00:00")),
   "checkSettings に START_DATE を出す");
+
+console.log("== SUBJECT_WORDS: 件名に「最終予定表」があるメールだけ読む（仮予定表は読まない）");
+check(props.SUBJECT_WORDS === "最終予定表", "setup が SUBJECT_WORDS を作る（はじめは「最終予定表」）");
+delete props.SUBJECT_WORDS;
+check(vm.runInContext("settings_().subjectWords.join()", sandbox) === "最終予定表", "スクリプト プロパティが無くても「最終予定表」で絞る");
+props.SUBJECT_WORDS = "最終予定表";
+const logBefore = logRows().length;
+const tKari = newThread();
+mail(tKari, new Date("2026-10-01T01:00:00Z"), [sample("sample_K_2026-10-22_utf8.csv")], "sanei@sanei.example", "csv@yushin-p.example",
+  "【三映】雄進印刷様 10月2日 仮予定表");
+mails = run();
+check(mails.length === 0, "仮予定表のメールは変換しない（知らせのメールも送らない）");
+check(logRows().length === logBefore + 1 && logRows()[logBefore][5] === "読まなかった" && logRows()[logBefore][6].includes("仮予定表"),
+  "「変換の記録」に、読まなかったことを1行残す");
+check(run().length === 0 && logRows().length === logBefore + 1, "次の回に、同じメールをもう一度記録しない");
+const tSai = newThread();
+mail(tSai, new Date("2026-10-01T01:10:00Z"), [sample("sample_L_2026-10-01_resend.csv")], "sanei@sanei.example", "csv@yushin-p.example",
+  "Fw: 【三映】雄進印刷様 10月2日 最終　予定表");
+mails = run();
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 1件", "件名に「最終予定表」があれば変換する（空白・全角のちがいは気にしない）: " +
+  (mails[0] || {}).subject);
+props.SUBJECT_WORDS = "未設定";
+mail(newThread(), new Date("2026-10-01T01:20:00Z"), [sample("sample_L_2026-10-01_resend.csv")], "sanei@sanei.example", "csv@yushin-p.example",
+  "仮予定表");
+check(run().length === 1, "「未設定」なら件名で絞らない");
+props.SUBJECT_WORDS = "最終予定表, 確定版";
+mail(newThread(), new Date("2026-10-01T01:30:00Z"), [sample("sample_L_2026-10-01_resend.csv")], "sanei@sanei.example", "csv@yushin-p.example",
+  "予定表（確定版）");
+check(run().length === 1, "言葉はカンマ区切りで複数（どれか1つが入っていればよい）");
+props.SUBJECT_WORDS = "最終予定表";
+check(vm.runInContext("checkSettings()", sandbox).some((l) => l.includes("SUBJECT_WORDS") && l.includes("最終予定表")),
+  "checkSettings に SUBJECT_WORDS を出す");
 
 console.log("== 手で押した「実行」が、5分おきの回と重なったとき");
 lockBusy = true;   // ほかの回が動いていて、鍵が取れないとき
