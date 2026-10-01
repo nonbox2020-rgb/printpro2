@@ -39,6 +39,21 @@ const SETTINGS = {                                                // スクリ�
 };
 
 function saveSaneiCsv() {
+  // 5分おきの回と、手で押した「実行」が重なっても同じメールを二度変換しないよう、1回ずつ順に動かす。
+  // ほかの回が動いていれば終わるまで（最大1分）待ち、終わったら続きをする
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(60 * 1000)) {
+    console.log('ほかの回が動いているため、今回は何もしませんでした（次の回で処理します）');
+    return;
+  }
+  try {
+    saveSaneiCsvNow_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function saveSaneiCsvNow_() {
   const s = settings_();
   const root = childFolder_(DriveApp.getRootFolder(), PARENT_NAME);
   const log = openLog_(root);

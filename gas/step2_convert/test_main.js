@@ -92,8 +92,10 @@ let lastQuery = "";
 const labels = {};
 const jst = (d) => new Date(d.getTime() + 9 * 3600 * 1000);
 const p2 = (n) => String(n).padStart(2, "0");
+let lockBusy = false;   // true = ほかの回（5分おきの回など）が動いていて、鍵が取れない
 const sandbox = {
   console: { log: (...a) => logs.push(a.join(" ")) },
+  LockService: { getScriptLock: () => ({ tryLock: () => !lockBusy, releaseLock: () => {} }) },
   DriveApp: {
     getRootFolder: () => myDrive,
     getFileById: (id) => {   // 本物と同じく、無い id ならエラー
@@ -364,6 +366,20 @@ files.filter((f) => f.parent === folderAt(P, "2_勘太郎用")).forEach((f) => g
 mails = run();
 check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎のパソコンの受け取りが元にもどりました", "受け取られたら「元にもどりました」");
 check(run().length === 0, "元にもどったあとは何も送らない");
+
+console.log("== 手で押した「実行」が、5分おきの回と重なったとき");
+lockBusy = true;   // ほかの回が動いていて、鍵が取れないとき
+const tLock = newThread();
+mail(tLock, new Date(), [sample("sample_M_2026-10-01_both_sides.csv")], "sanei@sanei.example", "csv@yushin-p.example");
+const filesBefore = files.length;
+mails = run();
+check(mails.length === 0 && files.length === filesBefore && logs.some((l) => l.includes("ほかの回が動いているため")),
+  "ほかの回が動いている間は何もしない（同じメールを二度変換しない）");
+lockBusy = false;
+mails = run();
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 5件" && mails[0].body.includes("[表裏]"),
+  "そのあとの回で1回だけ変換する（「表裏」の行のお知らせつき）: " + (mails[0] || {}).subject);
+check(run().length === 0, "もう一度押しても、二度は変換しない");
 
 if (failed) {
   console.log(`❌ ${failed} 件が期待と違います`);

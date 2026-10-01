@@ -133,6 +133,7 @@ Google Apps Script（GAS）だけで動く版です。Google Workspace の中で
   - `1_main.gs`（流れ）・`2_rules.gs`（変換のルール。中身は `sanei_config.yaml` と同じ）・`3_converter.gs`（変換のしくみ。`app/sanei_converter.py` と同じ動き）
   - `4_webapp.gs`（勘太郎のパソコンの受け取り係が取りに来る受け取り口。下の「受け取り係（GAS 版）」で使う）
   - 使い方: script.google.com のプロジェクトに3つのファイルを作って貼る → `setup` を1回実行（許可を聞かれたら許可）。設定の欄と、5分おきに `saveSaneiCsv` を動かすトリガーができる
+  - 5分待たずに試すときは、関数を `saveSaneiCsv` にして「実行」を押す。5分おきの回と重なっても1回ずつ順に動くので、同じメールを二度変換しない（`resetPractice` は押さない。済んだメールの記録が消え、前のメールをもう一度変換してしまう）
   - 設定はコードではなく「スクリプト プロパティ」で変える（プロジェクトの設定 → スクリプト プロパティ）。変えたら `checkSettings` で、見ている Gmail・Gmail の検索・対象になるメールの数を確かめる
 
 | スクリプト プロパティ | 意味 | はじめの値 |
