@@ -15,6 +15,8 @@
 //                    （ほかのアドレスに届くメールは、このアカウントへ自動転送しておく）
 //   NOTIFY_TO      結果を知らせるメールアドレス。複数はカンマ区切り。「未設定」ならこのアカウントへ
 //   KEEP_DAYS      ドライブに保存したCSVを残す日数（初めは 3）。過ぎたらゴミ箱へ（30日間は元に戻せる）。0 なら消さない
+//   START_DATE     この日（時刻も書ける）より前に届いたメールは読まない。初めは 2026/10/01（本番を始めた日）
+//                  例 2026/10/01 、2026/10/01 15:00（日本の時刻）。「未設定」なら日付で絞らない（7日以内を全部読む）
 //   設定を変えたら checkSettings を実行すると、どのメールが対象になるかを確かめられる。
 //   done・LAST_CLEANUP・AGENT_LAST_SEEN・PICKUP_ALERTED は GAS が使う控えなので触らない。
 //   AGENT_TOKEN は受け取り口の合言葉（4_webapp.gs の makeAgentToken で作る）。
@@ -36,6 +38,7 @@ const SETTINGS = {                                                // スクリ�
   CHECK_ADDRESS: UNSET,
   NOTIFY_TO: UNSET,
   KEEP_DAYS: '3',
+  START_DATE: '2026/10/01',   // 本番を始めた日。これより前に届いたメールは読まない（古いメールを勘太郎へ送らない）
 };
 
 function saveSaneiCsv() {
@@ -65,6 +68,7 @@ function saveSaneiCsvNow_() {
   GmailApp.search(searchQuery_(s), 0, 50).forEach(thread => {
     thread.getMessages().forEach(msg => {
       if (done.includes(msg.getId())) return;                    // 保存済みのメールはとばす
+      if (s.start && msg.getDate() < s.start) return;            // START_DATE より前に届いたメールは読まない
       if (fromSanei_(msg, s)) {                                  // 同じスレッドの、三映様以外のメールは使わない
         msg.getAttachments().forEach(att => {
           if (!/\.csv$/i.test(att.getName())) return;            // CSV だけ
@@ -122,12 +126,29 @@ function settings_() {
   const list = key => value(key).split(/[,、，\s]+/).map(x => x.trim()).filter(x => x);
   let keepDays = parseInt(value('KEEP_DAYS'), 10);
   if (isNaN(keepDays) || keepDays < 0) keepDays = Number(SETTINGS.KEEP_DAYS);
-  return { from: list('SANEI_FROM'), check: value('CHECK_ADDRESS'), notify: list('NOTIFY_TO'), keepDays: keepDays };
+  return { from: list('SANEI_FROM'), check: value('CHECK_ADDRESS'), notify: list('NOTIFY_TO'), keepDays: keepDays,
+    start: startDate_(value('START_DATE')) };
+}
+
+// START_DATE（例 2026/10/01 、2026/10/01 15:00。日本の時刻）→ その時刻。空なら null（日付で絞らない）
+// 書き間違いのまま古いメールまで読まないよう、読めない値なら止めて知らせる
+function startDate_(text) {
+  if (!text) return null;
+  const m = /^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/.exec(text);
+  const y = m ? +m[1] : 0, mo = m ? +m[2] : 0, d = m ? +m[3] : 0, h = m && m[4] ? +m[4] : 0, mi = m && m[5] ? +m[5] : 0;
+  const date = new Date(Date.UTC(y, mo - 1, d, h - 9, mi));
+  const jst = new Date(date.getTime() + 9 * 3600 * 1000);
+  if (!m || h > 23 || mi > 59 || jst.getUTCFullYear() !== y || jst.getUTCMonth() !== mo - 1 || jst.getUTCDate() !== d) {
+    throw new Error('スクリプト プロパティの START_DATE が読めません（例 2026/10/01 または 2026/10/01 15:00）: ' + text);
+  }
+  return date;
 }
 
 // Gmail の検索: 7日以内・CSV つき ＋ 三映様から（SANEI_FROM）＋ このアドレスに届いた（CHECK_ADDRESS）
+// ＋ START_DATE より後（Gmail の after: は秒で渡すと時刻まで正確）
 function searchQuery_(s) {
   let q = SEARCH_BASE;
+  if (s.start) q += ' after:' + Math.floor(s.start.getTime() / 1000);
   if (s.from.length) q += ' from:(' + s.from.join(' OR ') + ')';
   if (s.check) q += ' deliveredto:' + s.check;
   return q;
@@ -169,8 +190,10 @@ function checkSettings() {
     '三映CSVが届くアドレス（CHECK_ADDRESS）: ' + (s.check || '未設定（宛先で絞らない）'),
     '結果を知らせる先（NOTIFY_TO）: ' + notifyTo_(s),
     'CSVを残す日数（KEEP_DAYS）: ' + (s.keepDays ? s.keepDays + '日（過ぎたらゴミ箱へ）' : '0（消さない）'),
+    'これより前に届いたメールは読まない（START_DATE）: ' +
+      (s.start ? Utilities.formatDate(s.start, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm') : '未設定（日付で絞らない。7日以内を全部読む）'),
     'Gmail の検索: ' + q,
-    'いま対象になるメール（7日以内・CSV つき）: ' + threads.length + ' 件のスレッド',
+    'いま対象になるメール（7日以内・START_DATE 以降・CSV つき）: ' + threads.length + ' 件のスレッド',
     '5分おきのトリガー: ' + (hasTrigger ? 'あり' : 'なし（setup を実行してください）'),
   ];
   if (s.check && s.check.toLowerCase() !== String(me).toLowerCase()) {

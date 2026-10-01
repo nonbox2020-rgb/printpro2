@@ -114,8 +114,11 @@ const sandbox = {
       const froms = fromM ? fromM[1].split(" OR ").map((x) => x.trim().toLowerCase()) : null;
       const toM = /deliveredto:(\S+)/.exec(q);
       const to = toM ? toM[1].toLowerCase() : null;
+      const afterM = /after:(\d+)/.exec(q);   // 本物と同じく、秒で渡した時刻より後に届いたメールのあるスレッド
+      const after = afterM ? Number(afterM[1]) * 1000 : null;
       return threads.filter((t) => t.messages.some((m) => m.attachments.some((a) => /csv/i.test(a.getName())) &&
-        (!froms || froms.some((f) => m.from.toLowerCase().includes(f))) && (!to || m.deliveredTo.toLowerCase() === to)));
+        (!froms || froms.some((f) => m.from.toLowerCase().includes(f))) && (!to || m.deliveredTo.toLowerCase() === to) &&
+        (after === null || m.date.getTime() > after)));
     },
   },
   PropertiesService: {
@@ -168,6 +171,9 @@ const expectedNames = (s) => fs.readdirSync(path.join(EXPECTED, s)).filter((n) =
 const logRows = () => { const f = files.find((x) => x.getName() === "変換の記録" && x.parent === folderAt(P)); return sheets[f.id].getSheets()[0].rows; };
 const run = () => { const before = sent.length; vm.runInContext("saveSaneiCsv()", sandbox); return sent.slice(before); };
 const P = "三映CSV連携";
+
+// 練習のメールは 2026/9/30 の日付なので、START_DATE（はじめは 2026/10/01）では絞らずに始める。下で START_DATE を確かめる
+props.START_DATE = "未設定";
 
 // ---------------- 1回目: 練習メール（A・B・C と PDF）----------------
 console.log("== 1回目: 練習メール（sample A・B・C と PDF）");
@@ -242,7 +248,12 @@ check(props.SANEI_FROM === "未設定" && props.CHECK_ADDRESS === "未設定" &&
 check(triggers.length === 1 && triggers[0].getHandlerFunction() === "saveSaneiCsv" && triggers[0].minutes === 5, "5分おきのトリガーを作る");
 props.SANEI_FROM = "sanei@sanei.example";
 vm.runInContext("setup()", sandbox);
-check(triggers.length === 1 && props.SANEI_FROM === "sanei@sanei.example", "もう一度実行しても、トリガーは増えず、変えた設定も消さない");
+check(triggers.length === 1 && props.SANEI_FROM === "sanei@sanei.example" && props.START_DATE === "未設定",
+  "もう一度実行しても、トリガーは増えず、変えた設定も消さない");
+delete props.START_DATE;
+vm.runInContext("setup()", sandbox);
+check(props.START_DATE === "2026/10/01", "START_DATE が無ければ、はじめの値 2026/10/01（本番を始めた日）を作る");
+props.START_DATE = "未設定";
 
 console.log("== 設定: 三映様のアドレス（SANEI_FROM）で絞る");
 const base = out().length;
@@ -366,6 +377,34 @@ files.filter((f) => f.parent === folderAt(P, "2_勘太郎用")).forEach((f) => g
 mails = run();
 check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎のパソコンの受け取りが元にもどりました", "受け取られたら「元にもどりました」");
 check(run().length === 0, "元にもどったあとは何も送らない");
+
+console.log("== START_DATE: 本番を始めた日より前に届いたメールは読まない");
+props.START_DATE = "2026/10/01";
+const tOld = newThread(), tNew = newThread();
+mail(tOld, new Date("2026-09-30T14:59:00Z"), [sample("sample_K_2026-10-22_utf8.csv")], "sanei@sanei.example", "csv@yushin-p.example");   // 9/30 23:59（日本）
+mail(tNew, new Date("2026-09-30T15:00:30Z"), [sample("sample_L_2026-10-01_resend.csv")], "sanei@sanei.example", "csv@yushin-p.example");  // 10/1 0:00（日本）
+mails = run();
+check(lastQuery.includes("after:1790780400"), "Gmail の検索に after:（10/1 0:00 日本時刻を秒で）: " + lastQuery);
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 1件",
+  "10/1 0:00 より後に届いたメールだけ変換する（9/30 23:59 のものは読まない）: " + (mails[0] || {}).subject);
+const tMix = newThread();
+mail(tMix, new Date("2026-09-29T00:00:00Z"), [sample("sample_K_2026-10-22_utf8.csv")], "sanei@sanei.example", "csv@yushin-p.example");
+mail(tMix, new Date("2026-10-01T02:00:00Z"), [sample("sample_L_2026-10-01_resend.csv")], "sanei@sanei.example", "csv@yushin-p.example");
+mails = run();
+check(mails.length === 1 && mails[0].subject === "【三映CSV】勘太郎用 1件", "同じスレッドでも、START_DATE より前のメールのCSVは読まない: " + (mails[0] || {}).subject);
+check(run().length === 0, "古いメールは、次の回にも読まない");
+props.START_DATE = "10月1日";
+let startErr = "";
+try { run(); } catch (e) { startErr = e.message; }
+check(/START_DATE が読めません/.test(startErr), "書き間違いのときは止めて知らせる（古いメールまで読まない）: " + startErr);
+check(vm.runInContext("startDate_('2026/10/01 15:00').toISOString()", sandbox) === "2026-10-01T06:00:00.000Z" &&
+  vm.runInContext("startDate_('2026-9-30').toISOString()", sandbox) === "2026-09-29T15:00:00.000Z", "時刻つき・ハイフンも読める（日本の時刻）");
+let badDate = "";
+try { vm.runInContext("startDate_('2026/02/30')", sandbox); } catch (e) { badDate = e.message; }
+check(/START_DATE が読めません/.test(badDate), "無い日付（2/30）も止めて知らせる");
+props.START_DATE = "2026/10/01";
+check(vm.runInContext("checkSettings()", sandbox).some((l) => l.includes("START_DATE") && l.includes("2026/10/01 00:00")),
+  "checkSettings に START_DATE を出す");
 
 console.log("== 手で押した「実行」が、5分おきの回と重なったとき");
 lockBusy = true;   // ほかの回が動いていて、鍵が取れないとき
