@@ -154,6 +154,38 @@ def run():
     assert conv._tpl("print_note", "校正", True, w).startswith("先方支給 色校正合わせです") and not w, w
     assert conv._tpl("delivery_note", "校正", True, w) == CFG["templates"]["delivery_note"]["proof"] and not w, w
 
+    # 「表裏」(両面)の行(2026-10-01): 色が数字だけなら表も裏も同じ色数 → 納品日は2営業日後。
+    # 同じ受注№で中身が同じ「表裏」の行は1行にまとめる。「表」の行や、中身が違う「表裏」の行はまとめない
+    assert conv._split_color("4", True) == ("4", "4")
+    assert conv._split_color("4c", True) == ("4", "4")
+    assert conv._split_color("4/1c", True) == ("4", "1")
+    assert conv._split_color("4") == ("4", "0")
+    both = "\r\n".join([
+        ",,,,印刷予定表,,,,2026-10-01 予定,,,,,,,,,,テスト社",
+        HEADER,
+        "1,9999101-00-00,両面,台紙,,表裏,菊全判,コート,93.5,20,4,20,10/1中,断裁,,,,得意先,",
+        "2,9999101-00-00,両面,台紙,,表裏,菊全判,コート,93.5,20,4,20,10/1中,断裁,,,,得意先,",
+        "3,9999102-00-00,表紙と本文,冊子,,表裏,4/6全,コート,110,20,4,20,表紙(4P),中綴,,,,得意先,",
+        "4,9999102-00-00,表紙と本文,冊子,,表裏,4/6全,コート,110,20,4,20,\"1,2折(8P)\",中綴,,,,得意先,",
+        "5,9999103-00-00,同じ表が2行,チラシ,,表,菊全判,コート,73,20,4,20,,断裁,,,,得意先,",
+        "6,9999103-00-00,同じ表が2行,チラシ,,表,菊全判,コート,73,20,4,20,,断裁,,,,得意先,",
+    ]) + "\r\n"
+    rb = conv.convert(both)
+    cb = {c["order_no"]: c for c in rb["cases"]}
+    one = cb["9999101-00-00"]
+    assert len(one["b_rows"]) == 1 and one["src_count"] == 1, one
+    assert (one["b_rows"][0]["color_front"], one["b_rows"][0]["color_back"]) == ("4", "4")
+    assert one["b_rows"][0]["delivery_date"] == "2026/10/05", one["b_rows"][0]["delivery_date"]   # 10/3 第1土曜・10/4 日曜
+    assert [w for w in rb["warnings"] if w.startswith("[表裏]")] == [
+        "[表裏] 本番 受注№9999101-00-00: 中身が同じ「表裏」の行を1行にまとめました(2行 → 1行。両面として扱う)"], rb["warnings"]
+    assert [r["print_item"] for r in cb["9999102-00-00"]["b_rows"]] == ["表紙", "1,2折"]
+    assert len(cb["9999103-00-00"]["b_rows"]) == 2
+    assert cb["9999103-00-00"]["b_rows"][0]["delivery_date"] == "2026/10/02"
+    cfg6 = yaml.safe_load(yaml.safe_dump(CFG))
+    cfg6["both_sides_value"] = ""   # 空にすると今までどおり(行はそのまま・数字だけの色は裏0)
+    off = {c["order_no"]: c for c in SaneiConverter(cfg6).convert(both)["cases"]}
+    assert len(off["9999101-00-00"]["b_rows"]) == 2 and off["9999101-00-00"]["b_rows"][0]["color_back"] == "0"
+
     # encoding を utf-8-sig にしても BOM は二重にならない
     cfg2 = yaml.safe_load(yaml.safe_dump(CFG))
     cfg2["output"]["encoding"] = "utf-8-sig"

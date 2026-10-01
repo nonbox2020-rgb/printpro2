@@ -127,7 +127,9 @@ class SaneiConverter:
             warnings.append("1行目のI列から下版予定日を取得できませんでした")
 
         skip_val = self.cfg["skip_side_value"]
+        both_val = self.cfg.get("both_sides_value", "")
         c = self.cols
+        per_row_keys = [col["key"] for col in self.cfg["csv_b_columns"] if col.get("per_row")]
 
         # セクション+受注№でグルーピング(出現順を保持)。裏行はここで除外。
         groups = {}          # (section, no) -> [src_row,...]
@@ -157,10 +159,23 @@ class SaneiConverter:
             section, no = key
             src_rows = groups[key]
             case_w = []
-            b_rows = [self._build_row(src, section, plate_date, i == 0, case_w)
-                      for i, src in enumerate(src_rows)]
+            b_rows = []
+            seen_both = set()   # 「表裏」の行の中身(N〜AB列)。同じ中身の「表裏」の行は1行にまとめる
+            for src in src_rows:
+                row_w = []
+                row = self._build_row(src, section, plate_date, not b_rows, row_w)
+                if both_val and self._cell(src, c["side"]).strip() == both_val:
+                    sig = tuple(row.get(k, "") for k in per_row_keys)
+                    if sig in seen_both:
+                        continue
+                    seen_both.add(sig)
+                b_rows.append(row)
+                case_w.extend(row_w)
+            if len(b_rows) < len(src_rows):
+                warnings.append(f"[表裏] {section} 受注№{no}: 中身が同じ「表裏」の行を1行にまとめました"
+                                f"({len(src_rows)}行 → {len(b_rows)}行。両面として扱う)")
             cases.append({"section": section, "order_no": no,
-                          "b_rows": b_rows, "src_count": len(src_rows),
+                          "b_rows": b_rows, "src_count": len(b_rows),
                           "warnings": case_w})
         for (section, no), cnt in dropped_all_ura.items():
             warnings.append(f"[裏のみ] {section} 受注№{no}: {cnt}行すべて「裏」→ "
@@ -176,7 +191,8 @@ class SaneiConverter:
         get = lambda k: self._cell(src, c[k]).strip()
 
         paper_size, print_size = self._convert_size(get("dimension"), warns)
-        front, back = self._split_color(get("color"))
+        both_val = self.cfg.get("both_sides_value", "")
+        front, back = self._split_color(get("color"), bool(both_val) and get("side") == both_val)
         is_jacket = False
         trim = ""
         if is_first:
@@ -261,8 +277,11 @@ class SaneiConverter:
                      f"→ 用紙:{paper} / 印刷:{pr}(要確認 B-2)")
         return paper, pr
 
-    def _split_color(self, val: str) -> tuple:
-        """色(K) → (表, 裏)。例 4/4c→(4,4)  4→(4,0)  5/1c→(5,1)"""
+    def _split_color(self, val: str, both_sides: bool = False) -> tuple:
+        """色(K) → (表, 裏)。例 4/4c→(4,4)  4→(4,0)  5/1c→(5,1)
+
+        both_sides: 裏表が「表裏」(両面)の行。色が数字だけなら表も裏も同じ色数(4→(4,4))
+        """
         if not val:
             return "", ""
         v = val.strip()
@@ -271,6 +290,8 @@ class SaneiConverter:
         default_back = self.cfg["color"]["default_back"]
         if "/" in v:
             fp, bp = v.split("/", 1)
+        elif both_sides:
+            fp, bp = v, v
         else:
             fp, bp = v, default_back
         return self._lead_int(fp, ""), self._lead_int(bp, default_back)

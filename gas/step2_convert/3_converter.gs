@@ -30,12 +30,30 @@ const SaneiConverter = (function () {
       groups.get(key).push(r);
     });
 
+    const both = R.both_sides_value || '';
+    const perRow = R.csv_b_columns.filter(function (col) { return col.per_row; }).map(function (col) { return col.key; });
     const cases = [];
     groups.forEach(function (rows, key) {
       const section = key.split('\t')[0], no = key.split('\t')[1];
       const caseWarnings = [];
-      const bRows = rows.map(function (src, i) { return buildRow(src, section, plateDate, i === 0, caseWarnings, R); });
-      const kase = { section: section, orderNo: no, rowCount: rows.length, warnings: caseWarnings, rows: bRows };
+      const bRows = [];
+      const seenBoth = {};   // 「表裏」の行の中身（N〜AB列）。同じ中身の「表裏」の行は1行にまとめる
+      rows.forEach(function (src) {
+        const rowWarnings = [];
+        const row = buildRow(src, section, plateDate, bRows.length === 0, rowWarnings, R);
+        if (both && cell(src, c.side).trim() === both) {
+          const sig = JSON.stringify(perRow.map(function (k) { return row[k] === undefined ? '' : row[k]; }));
+          if (seenBoth[sig]) return;
+          seenBoth[sig] = true;
+        }
+        bRows.push(row);
+        Array.prototype.push.apply(caseWarnings, rowWarnings);
+      });
+      if (bRows.length < rows.length) {
+        warnings.push('[表裏] ' + section + ' 受注№' + no + ': 中身が同じ「表裏」の行を1行にまとめました(' +
+          rows.length + '行 → ' + bRows.length + '行。両面として扱う)');
+      }
+      const kase = { section: section, orderNo: no, rowCount: bRows.length, warnings: caseWarnings, rows: bRows };
       kase.fileName = fileName(kase, plateDate, R);
       kase.csv = buildCsvB(kase, R);
       cases.push(kase);
@@ -123,7 +141,7 @@ const SaneiConverter = (function () {
     const c = R.input.columns, f = R.fixed;
     const get = function (k) { return cell(src, c[k]).trim(); };
     const size = convertSize(get('dimension'), warns, R);
-    const color = splitColor(get('color'), R);
+    const color = splitColor(get('color'), R, !!R.both_sides_value && get('side') === R.both_sides_value);
     let isJacket = false, trim = '';
     if (isFirst) {
       trim = trimSize(get('kind'), R);
@@ -203,14 +221,15 @@ const SaneiConverter = (function () {
   }
 
   // 色 → [表, 裏]。例 4/4c → 4,4  4 → 4,0  5/1c → 5,1
-  function splitColor(val, R) {
+  // bothSides: 裏表が「表裏」（両面）の行。色が数字だけなら表も裏も同じ色数（4 → 4,4）
+  function splitColor(val, R, bothSides) {
     if (!val) return ['', ''];
     let v = val.trim();
     Array.from(R.color.strip_chars).forEach(function (ch) { v = v.split(ch).join(''); });
     const def = R.color.default_back;
     const i = v.indexOf('/');
     const fp = i >= 0 ? v.slice(0, i) : v;
-    const bp = i >= 0 ? v.slice(i + 1) : def;
+    const bp = i >= 0 ? v.slice(i + 1) : (bothSides ? v : def);
     return [leadInt(fp, ''), leadInt(bp, def)];
   }
 
